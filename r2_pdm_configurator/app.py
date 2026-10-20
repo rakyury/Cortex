@@ -8,16 +8,24 @@ from __future__ import annotations
 import sys
 import time
 
-from PyQt6.QtCore import Qt, QTimer, QAbstractTableModel, QModelIndex
-from PyQt6.QtGui import QColor
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFormLayout, QGridLayout, QGroupBox,
+    QApplication, QCheckBox, QComboBox, QDockWidget, QGridLayout, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
-    QPushButton, QSpinBox, QSplitter, QTableView, QTreeWidget,
+    QPushButton, QSpinBox, QTableView, QTreeWidget,
     QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
-from pdm_can import PdmCanClient, open_adapter
+if __package__:
+    from .pdm_can import PdmCanClient, open_adapter
+    from .models.qt_telemetry import TelemetryModel
+    from .models.telemetry import diagnostics
+    from .ui.trend import TelemetryTrend
+else:
+    from pdm_can import PdmCanClient, open_adapter
+    from models.qt_telemetry import TelemetryModel
+    from models.telemetry import diagnostics
+    from ui.trend import TelemetryTrend
 
 
 INTERFACES = (
@@ -29,71 +37,6 @@ INTERFACES = (
     ("Vector", "vector", "0"),
     ("Virtual (test)", "virtual", "r2-pdm"),
 )
-
-
-class TelemetryModel(QAbstractTableModel):
-    HEADERS = ("ID", "Channel", "Value", "Unit", "Status", "Age")
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.client: PdmCanClient | None = None
-        self.rows = ([(f"SYS:{x}", x, "system", 0) for x in (
-            "Voltage", "Current", "Temperature", "Errors", "Alive")] +
-            [(f"OUT:{n:02}", f"Output {n:02}", "output", n) for n in range(1, 15)] +
-            [(f"DI:{n:02}", f"Digital {n}", "digital", n) for n in range(1, 9)] +
-            [(f"AI:{n:02}", f"Analogue {n}", "analogue", n) for n in range(1, 9)])
-    def rowCount(self, parent=QModelIndex()):  # noqa: N802
-        return 0 if parent.isValid() else len(self.rows)
-    def columnCount(self, parent=QModelIndex()):  # noqa: N802
-        return len(self.HEADERS)
-    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):  # noqa: N802
-        if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
-            return self.HEADERS[section]
-        return None
-    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
-        if not index.isValid():
-            return None
-        cid, label, kind, num = self.rows[index.row()]
-        if role == Qt.ItemDataRole.ForegroundRole:
-            if self.client and not self.client.online():
-                return QColor("#8994a5")
-            return None
-        if role != Qt.ItemDataRole.DisplayRole:
-            return None
-        value, unit, status, age = "—", "", "", "—"
-        c = self.client
-        if c is not None:
-            now = c.now()
-            if kind == "system":
-                s = c.system
-                if s.last_seen:
-                    key = cid.split(":")[1]
-                    vals = {
-                        "Voltage": (f"{s.battery_v:.1f}", "V"),
-                        "Current": (f"{s.total_current_a:.1f}", "A"),
-                        "Temperature": (str(s.temperature_c), "°C"),
-                        "Errors": (f"0x{s.error_flags:04X}", ""),
-                        "Alive": (str(s.alive), ""),
-                    }
-                    value, unit = vals[key]
-                    status = "Online" if c.online() else "Stale"
-                    age = f"{now - s.last_seen:.1f} s"
-            elif kind == "output" and num in c.channels:
-                ch = c.channels[num]
-                label = ch.name or label
-                value, unit = f"{ch.current_a:.1f}", "A"
-                status = "ON" if ch.enabled else "OFF"
-                age = f"{now - ch.last_seen:.1f} s"
-            elif kind == "digital" and c.digital_mask is not None:
-                value = str((c.digital_mask >> (num - 1)) & 1)
-                status = "Input"
-            elif kind == "analogue" and num in c.analogues:
-                ai = c.analogues[num]
-                value, unit, status = f"{ai.value:.3f}", f"unit {ai.units}", f"{ai.voltage_v:.3f} V"
-                age = f"{now - ai.last_seen:.1f} s"
-        cols = (cid, label, value, unit, status, age)
-        return cols[index.column()]
-    def refresh(self):
-        self.dataChanged.emit(self.index(0, 0), self.index(len(self.rows) - 1, len(self.HEADERS) - 1))
 
 
 class MainWindow(QMainWindow):
@@ -149,17 +92,23 @@ class MainWindow(QMainWindow):
         form.addWidget(self.status, 1, 0, 1, 7)
         outer.addWidget(bar)
 
-        split = QSplitter()
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Channels / CAN"])
-        for name, prefix, count in (("SYSTEM", "SYS", 5), ("OUTPUTS", "OUT", 14),
-                                    ("DIGITAL INPUTS", "DI", 8), ("ANALOGUE INPUTS", "AI", 8)):
+        for name, kind in (("SYSTEM", "system"), ("OUTPUTS", "output"),
+                           ("DIGITAL INPUTS", "digital"), ("ANALOGUE INPUTS", "analogue")):
             item = QTreeWidgetItem([name])
             self.tree.addTopLevelItem(item)
-            for n in range(1, count + 1):
-                item.addChild(QTreeWidgetItem([f"{prefix} {n:02}"]))
+            for row_index, (cid, label, row_kind, _) in enumerate(self.model.rows):
+                if row_kind == kind:
+                    child = QTreeWidgetItem([label])
+                    child.setData(0, Qt.ItemDataRole.UserRole, row_index)
+                    item.addChild(child)
         self.tree.expandAll()
-        split.addWidget(self.tree)
+        self.tree.itemClicked.connect(self._select_tree_channel)
+        self.channel_dock = QDockWidget("Channels", self)
+        self.channel_dock.setObjectName("channelsDock")
+        self.channel_dock.setWidget(self.tree)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.channel_dock)
         center = QWidget()
         central_layout = QVBoxLayout(center)
         central_layout.addWidget(QLabel("LIVE TELEMETRY  |  14 Outputs  /  8 Digital  /  8 Analogue"))
@@ -169,9 +118,21 @@ class MainWindow(QMainWindow):
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         central_layout.addWidget(self.table)
-        split.addWidget(center)
-        split.setSizes([270, 900])
-        outer.addWidget(split, 1)
+        self.table.selectionModel().currentRowChanged.connect(self._selection_changed)
+        self.trend = TelemetryTrend()
+        central_layout.addWidget(self.trend)
+        outer.addWidget(center, 1)
+        self.diagnostic_text = QLabel("Disconnected — no live telemetry")
+        self.diagnostic_text.setWordWrap(True)
+        self.diagnostic_text.setMargin(10)
+        self.diagnostic_text.setAccessibleName("Telemetry diagnostics")
+        self.diagnostic_dock = QDockWidget("Diagnostics", self)
+        self.diagnostic_dock.setObjectName("diagnosticsDock")
+        self.diagnostic_dock.setWidget(self.diagnostic_text)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.diagnostic_dock)
+        view_menu = self.menuBar().addMenu("View")
+        view_menu.addAction(self.channel_dock.toggleViewAction())
+        view_menu.addAction(self.diagnostic_dock.toggleViewAction())
 
         panel = QGroupBox("Configuration over CAN  (live controller required)")
         row = QHBoxLayout(panel)
@@ -189,6 +150,7 @@ class MainWindow(QMainWindow):
         self.arm.toggled.connect(self._arm_changed)
         self.send = QPushButton("Send channel configuration")
         self.send.clicked.connect(self._write_config)
+        self.send.setEnabled(False)
         row.addWidget(QLabel("Output"))
         row.addWidget(self.channel)
         row.addWidget(QLabel("High A"))
@@ -206,7 +168,41 @@ class MainWindow(QMainWindow):
         help_text.setWordWrap(True)
         help_text.setStyleSheet("color:#9eabb9")
         outer.addWidget(help_text)
+        self.operation_status = QLabel("No configuration write requested")
+        self.operation_status.setWordWrap(True)
+        outer.addWidget(self.operation_status)
         self._choose_adapter()
+
+    def _select_tree_channel(self, item, column):
+        row = item.data(0, Qt.ItemDataRole.UserRole)
+        if row is not None:
+            self.table.selectRow(row)
+
+    def _selection_changed(self, current, previous):
+        if current.isValid():
+            self.trend.append(self.model.samples[current.row()])
+
+    def _refresh_telemetry(self):
+        self.model.refresh()
+        self.diagnostic_text.setText(diagnostics(self.client, self.model.samples))
+        row = self.table.currentIndex().row()
+        if row >= 0:
+            self.trend.append(self.model.samples[row])
+        self._sync_write_controls()
+        readback = getattr(self.client, 'last_config_readback', None)
+        if readback is not None:
+            detail = ', '.join(f'{name}: expected {values[0]}, observed {values[1]}'
+                               for name, values in readback.discrepancies.items())
+            self.operation_status.setText(f'OUT {readback.number}: {readback.status}'
+                                          + (f' — {detail}' if detail else ''))
+
+    def _sync_write_controls(self):
+        online = self.client is not None and self.client.online()
+        armed = bool(online and self.client.armed)
+        self.arm.blockSignals(True)
+        self.arm.setChecked(armed)
+        self.arm.blockSignals(False)
+        self.send.setEnabled(armed)
 
     def _choose_adapter(self):
         _, channel = self.adapter.currentData()
@@ -221,6 +217,7 @@ class MainWindow(QMainWindow):
             bus = open_adapter(iface, self.port.text(), self.bitrate.currentData())
             self.client = PdmCanClient(bus)
             self.model.client = self.client
+            self._refresh_telemetry()
             self.timer.start()
             self.connect_btn.setText("Disconnect")
             self.status.setText("Connected to adapter; waiting for PDM 0x720 heartbeat…")
@@ -240,7 +237,8 @@ class MainWindow(QMainWindow):
                 pass
         self.client = None
         self.model.client = None
-        self.model.refresh()
+        self._refresh_telemetry()
+        self.trend.clear()
         self.adapter.setEnabled(True)
         self.port.setEnabled(True)
         self.bitrate.setEnabled(True)
@@ -258,6 +256,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Not connected", "No fresh valid PDM heartbeat.")
             return
         self.client.armed = bool(checked)
+        self._sync_write_controls()
 
     def _write_config(self):
         if not self.client or not self.client.armed or not self.client.online():
@@ -277,7 +276,7 @@ class MainWindow(QMainWindow):
         try:
             self.client.configure_channel(number, high_current=self.high.value(),
                                           low_current=self.low.value(), retries=self.retries.value())
-            self.status.setText(f"Config sent to OUT {number}; readback required (NO ACK)")
+            self.operation_status.setText(f"Config sent to OUT {number}; readback required (NO ACK)")
         except Exception as exc:
             QMessageBox.critical(self, "CAN write failed", str(exc))
         finally:
@@ -291,7 +290,7 @@ class MainWindow(QMainWindow):
             current = time.monotonic()
             if current - self.last_refresh > 0.2:
                 self.last_refresh = current
-                self.model.refresh()
+                self._refresh_telemetry()
                 self.status.setText(
                     ("PDM ONLINE" if self.client.online() else "Waiting / PDM offline")
                     + f"   · RX {self.client.rx_frames}   · bad/timeouts {self.client.bad_frames}"
