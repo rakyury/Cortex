@@ -37,6 +37,12 @@ namespace Cortex.Services
                     return false;
                 }
 
+                if (!ValidateConfiguration(snapshot, out error))
+                {
+                    snapshot = null;
+                    return false;
+                }
+
                 error = null;
                 return true;
             }
@@ -46,6 +52,65 @@ namespace Cortex.Services
                 error = $"Failed to parse configuration file: {ex.Message}";
                 return false;
             }
+        }
+
+        // Validate untrusted configuration files before applying any settings.
+        // These limits match the current Synapse PDM firmware, not the UI ranges.
+        private static bool ValidateConfiguration(ConfigSnapshot snapshot, out string? error)
+        {
+            error = null;
+
+            if (snapshot.Channels is { Count: > Constants.NUM_OUTPUT_CHANNELS })
+            {
+                error = "Configuration contains more than 14 output channels.";
+                return false;
+            }
+            if (snapshot.DigitalInputs is { Count: > Constants.NUM_DIGITAL_INPUTS } ||
+                snapshot.AnalogueInputs is { Count: > Constants.NUM_ANALOGUE_INPUTS })
+            {
+                error = "Configuration contains more input channels than this PDM supports.";
+                return false;
+            }
+
+            if (snapshot.Channels != null)
+            {
+                for (int i = 0; i < snapshot.Channels.Count; i++)
+                {
+                    var channel = snapshot.Channels[i];
+                    if ((channel.CurrentThresholdHigh is float high && (!float.IsFinite(high) || high < 0 || high > 17)) ||
+                        (channel.CurrentThresholdLow is float low && (!float.IsFinite(low) || low < 0 || low > 17)) ||
+                        (channel.InrushCurrentLimit is float inrush && (!float.IsFinite(inrush) || inrush < 0 || inrush > 50)) ||
+                        (channel.PWMSetDuty is byte duty && duty > 100) ||
+                        (channel.PWMMin is byte pwmMin && pwmMin > 100) ||
+                        (channel.PWMMax is byte pwmMax && pwmMax > 100))
+                    {
+                        error = $"Invalid current limit or PWM percentage on output channel {i + 1}.";
+                        return false;
+                    }
+                    if (channel.CurrentThresholdHigh is float max &&
+                        channel.CurrentThresholdLow is float min && min > max)
+                    {
+                        error = $"Low-current threshold exceeds high-current threshold on output channel {i + 1}.";
+                        return false;
+                    }
+                    if ((channel.InrushDelay is float delay && (!float.IsFinite(delay) || delay < 0 || delay > 2000)) ||
+                        (channel.SoftStartTime is float softStart && (!float.IsFinite(softStart) || softStart < 0 || softStart > 5000)) ||
+                        (channel.SoftStopTime is float softStop && (!float.IsFinite(softStop) || softStop < 0 || softStop > 5000)))
+                    {
+                        error = $"Invalid output timing value on channel {i + 1}.";
+                        return false;
+                    }
+                }
+            }
+
+            if (snapshot.SystemParameters?.SystemCurrentLimit is float systemLimit &&
+                (!float.IsFinite(systemLimit) || systemLimit < 0 || systemLimit > 150))
+            {
+                error = "System current limit must be between 0 and 150 A.";
+                return false;
+            }
+
+            return true;
         }
 
         public static void ApplySnapshot(DataStructures target, ConfigSnapshot snapshot)
