@@ -5,9 +5,11 @@ on:
       - 'r2_pdm_configurator/vm/**'
       - 'r2_pdm_configurator/channel_engine/**'
       - 'r2_pdm_configurator/tests/test_vm*'
+      - 'r2_pdm_configurator/models/computed.py'
+      - 'r2_pdm_configurator/tests/test_computed.py'
       - '.github/workflows/pdm-vm-parity.yml'
   push:
-    branches: [agent/pdm-channel-vm]
+    branches: [feature/r2-pdm-can-configurator, agent/pdm-channel-vm, agent/pdm-vm-ui]
 permissions:
   contents: read
 jobs:

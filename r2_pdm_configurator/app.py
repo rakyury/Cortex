@@ -7,11 +7,12 @@ from __future__ import annotations
 
 import sys
 import time
+from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDockWidget, QGridLayout, QGroupBox,
-    QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
+    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox,
     QPushButton, QSpinBox, QTableView, QTreeWidget,
     QTreeWidgetItem, QVBoxLayout, QWidget,
 )
@@ -21,11 +22,14 @@ if __package__:
     from .models.qt_telemetry import TelemetryModel
     from .models.telemetry import diagnostics
     from .ui.trend import TelemetryTrend
+    from .ui.computed import ComputedChannelEditor
 else:
-    from pdm_can import PdmCanClient, open_adapter
-    from models.qt_telemetry import TelemetryModel
-    from models.telemetry import diagnostics
-    from ui.trend import TelemetryTrend
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from r2_pdm_configurator.pdm_can import PdmCanClient, open_adapter
+    from r2_pdm_configurator.models.qt_telemetry import TelemetryModel
+    from r2_pdm_configurator.models.telemetry import diagnostics
+    from r2_pdm_configurator.ui.trend import TelemetryTrend
+    from r2_pdm_configurator.ui.computed import ComputedChannelEditor
 
 
 INTERFACES = (
@@ -43,7 +47,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("R2 | Synapse PDM — CAN Configurator")
-        self.resize(1250, 800)
+        self.resize(1450, 850)
         self.client = None
         self.model = TelemetryModel(self)
         self.timer = QTimer(self)
@@ -106,6 +110,8 @@ class MainWindow(QMainWindow):
                     child.setData(0, Qt.ItemDataRole.UserRole, row_index)
                     item.addChild(child)
         self.tree.expandAll()
+        self.computed_tree = QTreeWidgetItem(["COMPUTED · LOCAL"])
+        self.tree.addTopLevelItem(self.computed_tree)
         self.tree.itemClicked.connect(self._select_tree_channel)
         self.channel_dock = QDockWidget("Channels", self)
         self.channel_dock.setObjectName("channelsDock")
@@ -117,7 +123,10 @@ class MainWindow(QMainWindow):
         self.table = QTableView()
         self.table.setModel(self.model)
         self.table.setAlternatingRowColors(True)
-        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setStretchLastSection(False)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        for column, width in ((0, 135), (2, 75), (3, 70), (4, 200), (5, 65)):
+            self.table.setColumnWidth(column, width)
         self.table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         central_layout.addWidget(self.table)
         self.table.selectionModel().currentRowChanged.connect(self._selection_changed)
@@ -135,6 +144,13 @@ class MainWindow(QMainWindow):
         view_menu = self.menuBar().addMenu("View")
         view_menu.addAction(self.channel_dock.toggleViewAction())
         view_menu.addAction(self.diagnostic_dock.toggleViewAction())
+        self.computed_editor = ComputedChannelEditor(self.model.computed)
+        self.computed_editor.changed.connect(self._computed_changed)
+        self.computed_dock = QDockWidget("Computed channels · local preview", self)
+        self.computed_dock.setObjectName("computedChannelsDock")
+        self.computed_dock.setWidget(self.computed_editor)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.computed_dock)
+        view_menu.addAction(self.computed_dock.toggleViewAction())
 
         panel = QGroupBox("Configuration over CAN  (live controller required)")
         row = QHBoxLayout(panel)
@@ -184,6 +200,18 @@ class MainWindow(QMainWindow):
         if current.isValid():
             self.trend.append(self.model.samples[current.row()])
 
+    def _computed_changed(self):
+        self.trend.clear()  # A changed formula starts a new history.
+        self.table.clearSelection()
+        self._refresh_telemetry()
+        self.computed_tree.takeChildren()
+        for row_index, (_, label, kind, _) in enumerate(self.model.rows):
+            if kind == 'computed':
+                child = QTreeWidgetItem([label])
+                child.setData(0, Qt.ItemDataRole.UserRole, row_index)
+                self.computed_tree.addChild(child)
+        self.computed_tree.setExpanded(True)
+
     def _refresh_telemetry(self):
         self.model.refresh()
         self.diagnostic_text.setText(diagnostics(self.client, self.model.samples))
@@ -218,6 +246,7 @@ class MainWindow(QMainWindow):
             iface, _ = self.adapter.currentData()
             bus = open_adapter(iface, self.port.text(), self.bitrate.currentData())
             self.client = PdmCanClient(bus)
+            self.operation_status.setText("No configuration write requested for this connection")
             self.model.client = self.client
             self._refresh_telemetry()
             self.timer.start()
@@ -246,6 +275,7 @@ class MainWindow(QMainWindow):
         self.bitrate.setEnabled(True)
         self.connect_btn.setText("Connect")
         self.status.setText("Disconnected")
+        self.operation_status.setText("Disconnected — previous configuration writes remain unconfirmed")
 
     def _arm_changed(self, checked):
         if not self.client:

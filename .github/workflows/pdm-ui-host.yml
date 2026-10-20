@@ -1,7 +1,7 @@
 name: PDM telemetry UI offscreen tests
 on:
   push:
-    branches: [agent/pdm-ui-telemetry]
+    branches: [feature/r2-pdm-can-configurator, agent/pdm-ui-telemetry, agent/pdm-vm-ui]
   pull_request:
 permissions:
   contents: read
