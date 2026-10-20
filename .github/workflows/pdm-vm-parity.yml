@@ -1,0 +1,26 @@
+name: PDM VM C parity
+on:
+  pull_request:
+    paths:
+      - 'r2_pdm_configurator/vm/**'
+      - 'r2_pdm_configurator/channel_engine/**'
+      - 'r2_pdm_configurator/tests/test_vm*'
+      - '.github/workflows/pdm-vm-parity.yml'
+  push:
+    branches: [agent/pdm-channel-vm]
+permissions:
+  contents: read
+jobs:
+  c-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate bounded preview against device C with sanitizers
+        env:
+          PDM_VM_SANITIZE: '1'
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: python -m unittest r2_pdm_configurator.tests.test_vm_preview -v

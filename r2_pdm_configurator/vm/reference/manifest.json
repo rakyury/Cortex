@@ -1,0 +1,18 @@
+{
+  "repository": "rakyury/SynapsePDM",
+  "commit": "ba114a8c2599bd31800ba3e06dfb08b248cc4ea5",
+  "path": "pdm_cube/src/r2_shared",
+  "racing_dash_reference": "d3af311d61fb0e8848bea474fff7228d7e8eecc7",
+  "sha256_lf": {
+    "channel_engine/channel.c": "659a981ee91a877b711005a2195aedbad8285905f8c5a1876adbe33693637836",
+    "channel_engine/channel.h": "679dbfeeb7621fee18fbe7820073b8cb5aead9c502ed0fd02bbbe33df92b73d8",
+    "filters/filter.c": "0a6a01cf806f3a1dad6e89a5fd5dd6be53cdbcd1bf929f4b4af349a66778d18a",
+    "filters/filter.h": "a8d2c768e30d86fff0eda9baf316fcb463df9b57a90ab27073b165c34d7627af",
+    "tables/table.c": "aa82199b30df86556a33a7dcd50bd2e340ef4ba8e6f38584e2b77a052e5ffa78",
+    "tables/table.h": "e80e139907759845be9d2389e845b76040e9cbf6b6e6bbff9957598e92dceb98",
+    "timers/timer.c": "9eff8b0a7f33961b2f13a0e4576d34d096e94a015dcce3dc98b23765b3839dab",
+    "timers/timer.h": "8ea2a9e975834117c357f7b3c36372085f795c65bd2efb038f3e15aff4c3f41d",
+    "vm/vm.c": "63133420f36826f99139b8c0b1d57e03ae3b7a392343602503750e3709f537d8",
+    "vm/vm.h": "26f287158194d0db2d12e998e2ff8235ef3093697fe0523b049c757cb82697bf"
+  }
+}
