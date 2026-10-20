@@ -209,7 +209,7 @@ public class ConfigFileSerializerTests
     public void TryDeserialize_RejectsExcessChannelCount()
     {
         string channels = string.Join(",", System.Linq.Enumerable.Repeat("{}", Constants.NUM_OUTPUT_CHANNELS + 1));
-        bool accepted = ConfigFileSerializer.TryDeserialize("{\\"Channels\\":[" + channels + "]}", out _, out string? error);
+        bool accepted = ConfigFileSerializer.TryDeserialize("{\"Channels\":[" + channels + "]}", out _, out string? error);
         Assert.False(accepted);
         Assert.Contains("more than 14", error);
     }
