@@ -1,0 +1,31 @@
+name: R2 Synapse PDM CAN configurator
+
+on:
+  push:
+    paths:
+      - 'r2_pdm_configurator/**'
+      - '.github/workflows/r2-pdm-can.yml'
+    branches:
+      - 'feature/r2-pdm-can-configurator'
+  pull_request:
+    paths:
+      - 'r2_pdm_configurator/**'
+      - '.github/workflows/r2-pdm-can.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  protocol-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check Python syntax
+        run: python -m compileall -q r2_pdm_configurator
+      - name: Test CAN protocol without hardware
+        run: python -m unittest discover -s r2_pdm_configurator/tests -v
