@@ -39,6 +39,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Install Qt headless system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0
       - name: Install runtime libraries
         run: python -m pip install 'PyQt6>=6.6' 'python-can>=4.3'
       - name: Instantiate and close desktop configurator headlessly
