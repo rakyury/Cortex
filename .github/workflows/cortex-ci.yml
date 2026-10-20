@@ -1,0 +1,35 @@
+name: Cortex .NET build and tests
+
+on:
+  push:
+    branches: [main, fix/protocol-safety]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dotnet:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Restore
+        run: dotnet restore tests/Cortex.Tests/Cortex.Tests.csproj
+      - name: Build app and tests
+        run: dotnet build tests/Cortex.Tests/Cortex.Tests.csproj --configuration Release --no-restore -warnaserror
+      - name: Run tests and collect coverage
+        run: dotnet test tests/Cortex.Tests/Cortex.Tests.csproj --configuration Release --no-build --collect:"XPlat Code Coverage" --logger "trx;LogFileName=tests.trx"
+      - name: Upload test results and coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cortex-test-results
+          path: |
+            tests/Cortex.Tests/TestResults/
+          if-no-files-found: warn
