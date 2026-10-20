@@ -1,5 +1,7 @@
 """Read-only, bounded telemetry snapshots for offline VM previews."""
 from types import MappingProxyType
+from dataclasses import dataclass
+from typing import Mapping
 
 
 def int32(value):
@@ -8,8 +10,11 @@ def int32(value):
     return value
 
 
+@dataclass(frozen=True, slots=True)
 class Snapshot:
     """No write, transport, GPIO, or device configuration capability."""
+
+    values: Mapping[int, int]
 
     def __init__(self, values=None):
         data = {0: 0, 1: 1, 10: 0, 11: 0, 20: 0, 21: 100, 30: 0, 31: 0}
@@ -25,7 +30,7 @@ class Snapshot:
                 data[key] = int32(value)
         if len(data) > 128:
             raise ValueError("snapshot exceeds 128 channels including system channels")
-        self.values = MappingProxyType(data)
+        object.__setattr__(self, "values", MappingProxyType(data))
 
     def get(self, channel_id):
         if 0xA000 <= channel_id < 0xE000:

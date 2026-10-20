@@ -44,6 +44,12 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(snapshot.values[200], 0)
         with self.assertRaises(TypeError):
             snapshot.values[200] = 1
+        with self.assertRaises(AttributeError):
+            snapshot.values = {100: float("nan")}
+        with self.assertRaises(AttributeError):
+            del snapshot.values
+        self.assertFalse(hasattr(snapshot, "__dict__"))
+        self.assertEqual(execute(b"\x02\x64\x00\xff", snapshot), 37)
         for value in (float("nan"), float("inf"), 1.5, True, 1 << 31, -(1 << 31) - 1):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 Snapshot({100: value})
