@@ -30,10 +30,29 @@ Voltage / Less than / Constant 11500 creates a low-battery indicator below
 produce no numeric result. See [Computed channels](ui/COMPUTED_CHANNELS.md)
 for units, supported operations and limits.
 
-This is a local diagnostic preview: programs are not uploaded and results cannot
-be bound to hardware outputs. The experimental STM32Cube port keeps CAN silent
-and physical outputs OFF pending HIL; it does not yet provide live telemetry
-to this GUI.
+This editor is a local diagnostic preview: its programs are not uploaded and
+results cannot be bound to hardware outputs.
+
+## STM32Cube HAL telemetry and device VM
+
+Select **STM32Cube HAL diagnostics** before connecting to the paired HAL
+firmware. Its separate protocol displays the 14 interlocked gate states, CAN
+diagnostics, uptime, fault mask and device VM result. ADC voltage, load current,
+temperature and physical input acquisition are not implemented; those values
+are not synthesized. The legacy configuration controls are disabled in HAL mode.
+
+The **HAL diagnostic VM · RAM only** dock builds a diagnostic expression or
+loads validated bytecode. Arm and confirm each upload. Cortex sends bounded,
+correlated chunks; only an ACK and matching active-program CRC readback confirm
+the upload. A lost COMMIT reply is shown as unknown and requires explicit
+readback. The program disappears on reset. It cannot store arbitrary channels,
+write flash/EEPROM, or control outputs.
+
+This HAL version uses normal CAN for telemetry and replies, including CAN ACKs.
+Physical outputs remain forced LOW/OFF pending HIL. See
+[HAL UI guide](ui/HAL_DIAGNOSTICS.md), [wire protocol](HAL_CAN.md) and
+[actual-C simulator checks](integration/README.md). No hardware has been flashed
+or exercised by these tests.
 
 ## Protocol
 
