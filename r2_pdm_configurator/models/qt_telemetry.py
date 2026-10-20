@@ -2,6 +2,7 @@
 from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex
 from PyQt6.QtGui import QColor
 from .telemetry import ROWS, snapshot
+from .computed import ComputedChannels
 
 
 class TelemetryModel(QAbstractTableModel):
@@ -12,7 +13,8 @@ class TelemetryModel(QAbstractTableModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.client = None
-        self.rows = ROWS
+        self.computed = ComputedChannels()
+        self.rows = list(ROWS)
         self.samples = snapshot(None)
 
     def rowCount(self, parent=QModelIndex()):
@@ -40,5 +42,14 @@ class TelemetryModel(QAbstractTableModel):
         return None
 
     def refresh(self):
-        self.samples = snapshot(self.client)
-        self.dataChanged.emit(self.index(0, 0), self.index(len(self.rows) - 1, len(self.HEADERS) - 1))
+        base = snapshot(self.client)
+        samples = base + self.computed.evaluate(base)
+        rows = list(ROWS) + [(row.channel_id, row.label, 'computed', i)
+                             for i, row in enumerate(samples[len(ROWS):])]
+        if rows != self.rows:
+            self.beginResetModel()
+            self.rows, self.samples = rows, samples
+            self.endResetModel()
+        else:
+            self.samples = samples
+            self.dataChanged.emit(self.index(0, 0), self.index(len(self.rows) - 1, len(self.HEADERS) - 1))

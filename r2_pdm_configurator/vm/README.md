@@ -3,7 +3,8 @@
 This is an offline, read-only preview of the actual Racing Dash C integer VM
 used by the experimental STM32Cube PDM port. It has no CAN, serial, configuration
 write, flashing or output-control capability. Its result is telemetry only.
-It is not wired to the GUI yet and does not enable any PDM output.
+The GUI connects this preview through the local computed-channel editor
+(see `../ui/COMPUTED_CHANNELS.md`); it does not enable any PDM output.
 
 ## Compatibility and limits
 

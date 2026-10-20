@@ -2,11 +2,11 @@
 
 A **separate** PyQt6 configurator alongside the existing Cortex .NET/USB tool.
 Uses the R2 Racing Dash dark diagnostics workflow with adapter selection, channel
-tree, live values, and protected CAN configuration.
+tree, live values, local R2 VM computed channels, and protected CAN configuration.
 
 ## Run
 
-From the repository root, with Python 3.12+:
+From the repository root, with Python 3.10+:
 
     python -m pip install PyQt6 python-can
     python r2_pdm_configurator/app.py
@@ -20,6 +20,20 @@ R2_DASH_CONFIGURATOR_SRC to the absolute path of
 racing_dash/configurator_qt/src. That bridge needs the 32-bit helper Python,
 EUSB2CAN.dll, and original project installation. No proprietary binaries
 are copied into this project. See core/can_eusb2can.py in R2 Racing Dash.
+
+## Computed channels
+
+The **Computed channels · local preview** dock creates named values using the
+R2 VM, with results in the telemetry table, channel tree and graph. For example,
+Voltage / Less than / Constant 11500 creates a low-battery indicator below
+11.5 V. Definitions can be saved and loaded locally. Missing or stale inputs
+produce no numeric result. See [Computed channels](ui/COMPUTED_CHANNELS.md)
+for units, supported operations and limits.
+
+This is a local diagnostic preview: programs are not uploaded and results cannot
+be bound to hardware outputs. The experimental STM32Cube port keeps CAN silent
+and physical outputs OFF pending HIL; it does not yet provide live telemetry
+to this GUI.
 
 ## Protocol
 
@@ -48,6 +62,10 @@ implemented over CAN.
 
 ## Tests
 
+    python -m pip install -r r2_pdm_configurator/tests/requirements-ci.txt
     python -m unittest discover -s r2_pdm_configurator/tests -v
+    python -m unittest discover -s r2_pdm_configurator/ui/tests -v
 
-Tests use a fake CAN bus; PyQt6 and python-can are not needed for tests.
+Tests use fake/virtual CAN buses and offscreen Qt; no physical hardware is
+required. Install a host C compiler for the compiled Racing Dash VM parity and
+fuzz tests. CI runs both test suites and the compiled C checks.
