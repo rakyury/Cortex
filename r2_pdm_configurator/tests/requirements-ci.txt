@@ -1,0 +1,4 @@
+# Exact validation dependencies. No physical CAN driver or vendor DLL required.
+python-can==4.6.1
+PyQt6==6.11.0
+coverage==7.10.7

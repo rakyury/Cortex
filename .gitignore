@@ -9,4 +9,7 @@
 build-warnings.log
 /InnoSetup Script/Output
 /artifacts/publish
+__pycache__/
+.coverage
+htmlcov/
 InnoSetup Script/Output/CortexSetupWindows.zip
