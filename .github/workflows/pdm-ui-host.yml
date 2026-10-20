@@ -1,0 +1,22 @@
+name: PDM telemetry UI offscreen tests
+on:
+  push:
+    branches: [agent/pdm-ui-telemetry]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  telemetry-ui:
+    runs-on: ubuntu-24.04
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Qt offscreen system libraries
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0
+      - run: python -m pip install PyQt6==6.11.0 python-can==4.6.1
+      - run: python -m unittest discover -s r2_pdm_configurator/ui/tests -p 'test_ui*.py' -v
+      - run: python -m unittest discover -s r2_pdm_configurator/tests -p 'test_ui_model.py' -v
