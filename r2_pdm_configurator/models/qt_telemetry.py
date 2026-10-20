@@ -3,6 +3,7 @@ from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex
 from PyQt6.QtGui import QColor
 from .telemetry import ROWS, snapshot
 from .computed import ComputedChannels
+from .hal_telemetry import HAL_ROWS, hal_snapshot
 
 
 class TelemetryModel(QAbstractTableModel):
@@ -13,6 +14,7 @@ class TelemetryModel(QAbstractTableModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.client = None
+        self.protocol = "legacy"
         self.computed = ComputedChannels()
         self.rows = list(ROWS)
         self.samples = snapshot(None)
@@ -42,10 +44,14 @@ class TelemetryModel(QAbstractTableModel):
         return None
 
     def refresh(self):
-        base = snapshot(self.client)
-        samples = base + self.computed.evaluate(base)
-        rows = list(ROWS) + [(row.channel_id, row.label, 'computed', i)
-                             for i, row in enumerate(samples[len(ROWS):])]
+        if self.protocol == 'hal':
+            samples = hal_snapshot(self.client)
+            rows = list(HAL_ROWS)
+        else:
+            base = snapshot(self.client)
+            samples = base + self.computed.evaluate(base)
+            rows = list(ROWS) + [(row.channel_id, row.label, 'computed', i)
+                                 for i, row in enumerate(samples[len(ROWS):])]
         if rows != self.rows:
             self.beginResetModel()
             self.rows, self.samples = rows, samples

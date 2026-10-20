@@ -19,6 +19,9 @@ from PyQt6.QtWidgets import (
 
 if __package__:
     from .pdm_can import PdmCanClient, open_adapter
+    from .hal_can import HalCanClient
+    from .models.hal_telemetry import hal_diagnostics
+    from .ui.hal_vm import HalVmEditor
     from .models.qt_telemetry import TelemetryModel
     from .models.telemetry import diagnostics
     from .ui.trend import TelemetryTrend
@@ -26,6 +29,9 @@ if __package__:
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from r2_pdm_configurator.pdm_can import PdmCanClient, open_adapter
+    from r2_pdm_configurator.hal_can import HalCanClient
+    from r2_pdm_configurator.models.hal_telemetry import hal_diagnostics
+    from r2_pdm_configurator.ui.hal_vm import HalVmEditor
     from r2_pdm_configurator.models.qt_telemetry import TelemetryModel
     from r2_pdm_configurator.models.telemetry import diagnostics
     from r2_pdm_configurator.ui.trend import TelemetryTrend
@@ -74,6 +80,10 @@ class MainWindow(QMainWindow):
         outer = QVBoxLayout(root)
         bar = QGroupBox("Connection / CAN transport")
         form = QGridLayout(bar)
+        self.protocol = QComboBox()
+        self.protocol.addItem('Legacy PDM', 'legacy')
+        self.protocol.addItem('STM32Cube HAL diagnostics', 'hal')
+        self.protocol.setAccessibleName('PDM protocol')
         self.adapter = QComboBox()
         for label, iface, default_channel in INTERFACES:
             self.adapter.addItem(label, (iface, default_channel))
@@ -94,7 +104,9 @@ class MainWindow(QMainWindow):
         form.addWidget(QLabel("Bitrate"), 0, 4)
         form.addWidget(self.bitrate, 0, 5)
         form.addWidget(self.connect_btn, 0, 6)
-        form.addWidget(self.status, 1, 0, 1, 7)
+        form.addWidget(QLabel('Protocol'), 1, 0)
+        form.addWidget(self.protocol, 1, 1, 1, 2)
+        form.addWidget(self.status, 2, 0, 1, 7)
         outer.addWidget(bar)
 
         self.tree = QTreeWidget()
@@ -119,7 +131,8 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.channel_dock)
         center = QWidget()
         central_layout = QVBoxLayout(center)
-        central_layout.addWidget(QLabel("LIVE TELEMETRY  |  14 Outputs  /  8 Digital  /  8 Analogue"))
+        self.telemetry_title = QLabel('LIVE TELEMETRY  |  14 Outputs  /  8 Digital  /  8 Analogue')
+        central_layout.addWidget(self.telemetry_title)
         self.table = QTableView()
         self.table.setModel(self.model)
         self.table.setAlternatingRowColors(True)
@@ -152,7 +165,16 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.computed_dock)
         view_menu.addAction(self.computed_dock.toggleViewAction())
 
-        panel = QGroupBox("Configuration over CAN  (live controller required)")
+        self.hal_editor = HalVmEditor()
+        self.hal_dock = QDockWidget('HAL diagnostic VM · RAM only', self)
+        self.hal_dock.setObjectName('halVmDock')
+        self.hal_dock.setWidget(self.hal_editor)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.hal_dock)
+        self.hal_dock.hide()
+        view_menu.addAction(self.hal_dock.toggleViewAction())
+
+        panel = QGroupBox('Configuration over CAN  (live controller required)')
+        self.legacy_config_panel = panel
         row = QHBoxLayout(panel)
         self.channel = QSpinBox()
         self.channel.setRange(1, 14)
@@ -183,6 +205,7 @@ class MainWindow(QMainWindow):
         help_text = QLabel(
             "Firmware uses integer-A limits for CAN F1 writes. No config-write ACK exists; "
             "always confirm by re-reading. CAN output control is disabled in this UI.")
+        self.legacy_help = help_text
         help_text.setWordWrap(True)
         help_text.setStyleSheet("color:#9eabb9")
         outer.addWidget(help_text)
@@ -190,6 +213,47 @@ class MainWindow(QMainWindow):
         self.operation_status.setWordWrap(True)
         outer.addWidget(self.operation_status)
         self._choose_adapter()
+        self.protocol.currentIndexChanged.connect(self._protocol_changed)
+
+    def _is_hal(self):
+        return self.protocol.currentData() == 'hal'
+
+    def _protocol_changed(self):
+        # UI selector is locked while connected; guard programmatic changes too.
+        if self.client is not None:
+            self._disconnect()
+        self.model.protocol = self.protocol.currentData()
+        self.trend.clear()
+        self.legacy_config_panel.setEnabled(not self._is_hal())
+        self.legacy_config_panel.setVisible(not self._is_hal())
+        self.legacy_help.setVisible(not self._is_hal())
+        self.operation_status.setVisible(not self._is_hal())
+        self.computed_editor.setEnabled(not self._is_hal())
+        self.computed_dock.setVisible(not self._is_hal())
+        self.hal_dock.setVisible(self._is_hal())
+        self.telemetry_title.setText(
+            'HAL DIAGNOSTICS · output gates OFF · ADC and physical input measurements unavailable'
+            if self._is_hal() else 'LIVE TELEMETRY  |  14 Outputs  /  8 Digital  /  8 Analogue')
+        self._refresh_telemetry()
+        self._rebuild_tree()
+
+    def _rebuild_tree(self):
+        self.tree.clear()
+        groups = (("HAL DIAGNOSTICS", "hal"),) if self._is_hal() else (
+            ('SYSTEM', 'system'), ('OUTPUTS', 'output'), ('DIGITAL INPUTS', 'digital'),
+            ('ANALOGUE INPUTS', 'analogue'), ('COMPUTED · LOCAL', 'computed'))
+        self.computed_tree = None
+        for title, kind in groups:
+            parent = QTreeWidgetItem([title])
+            self.tree.addTopLevelItem(parent)
+            if kind == 'computed':
+                self.computed_tree = parent
+            for row_index, (_, label, row_kind, _) in enumerate(self.model.rows):
+                if row_kind == kind:
+                    child = QTreeWidgetItem([label])
+                    child.setData(0, Qt.ItemDataRole.UserRole, row_index)
+                    parent.addChild(child)
+        self.tree.expandAll()
 
     def _select_tree_channel(self, item, column):
         row = item.data(0, Qt.ItemDataRole.UserRole)
@@ -204,19 +268,15 @@ class MainWindow(QMainWindow):
         self.trend.clear()  # A changed formula starts a new history.
         self.table.clearSelection()
         self._refresh_telemetry()
-        self.computed_tree.takeChildren()
-        for row_index, (_, label, kind, _) in enumerate(self.model.rows):
-            if kind == 'computed':
-                child = QTreeWidgetItem([label])
-                child.setData(0, Qt.ItemDataRole.UserRole, row_index)
-                self.computed_tree.addChild(child)
-        self.computed_tree.setExpanded(True)
+        self._rebuild_tree()
 
     def _refresh_telemetry(self):
         self.model.refresh()
-        self.diagnostic_text.setText(diagnostics(self.client, self.model.samples))
+        self.diagnostic_text.setText(hal_diagnostics(self.client) if self._is_hal()
+                                     else diagnostics(self.client, self.model.samples))
+        self.hal_editor.set_client(self.client if self._is_hal() else None)
         row = self.table.currentIndex().row()
-        if row >= 0:
+        if 0 <= row < len(self.model.samples):
             self.trend.append(self.model.samples[row])
         self._sync_write_controls()
         readback = getattr(self.client, 'last_config_readback', None)
@@ -227,7 +287,7 @@ class MainWindow(QMainWindow):
                                           + (f' — {detail}' if detail else ''))
 
     def _sync_write_controls(self):
-        online = self.client is not None and self.client.online()
+        online = not self._is_hal() and self.client is not None and self.client.online()
         armed = bool(online and self.client.armed)
         self.arm.blockSignals(True)
         self.arm.setChecked(armed)
@@ -245,13 +305,15 @@ class MainWindow(QMainWindow):
         try:
             iface, _ = self.adapter.currentData()
             bus = open_adapter(iface, self.port.text(), self.bitrate.currentData())
-            self.client = PdmCanClient(bus)
+            self.client = HalCanClient(bus) if self._is_hal() else PdmCanClient(bus)
             self.operation_status.setText("No configuration write requested for this connection")
             self.model.client = self.client
             self._refresh_telemetry()
             self.timer.start()
             self.connect_btn.setText("Disconnect")
-            self.status.setText("Connected to adapter; waiting for PDM 0x720 heartbeat…")
+            self.status.setText('Connected; waiting for HAL 0x580 heartbeat…' if self._is_hal()
+                                else 'Connected to adapter; waiting for PDM 0x720 heartbeat…')
+            self.protocol.setEnabled(False)
             self.adapter.setEnabled(False)
             self.port.setEnabled(False)
             self.bitrate.setEnabled(False)
@@ -270,6 +332,7 @@ class MainWindow(QMainWindow):
         self.model.client = None
         self._refresh_telemetry()
         self.trend.clear()
+        self.protocol.setEnabled(True)
         self.adapter.setEnabled(True)
         self.port.setEnabled(True)
         self.bitrate.setEnabled(True)
@@ -278,7 +341,7 @@ class MainWindow(QMainWindow):
         self.operation_status.setText("Disconnected — previous configuration writes remain unconfirmed")
 
     def _arm_changed(self, checked):
-        if not self.client:
+        if self._is_hal() or not self.client:
             self.arm.blockSignals(True)
             self.arm.setChecked(False)
             self.arm.blockSignals(False)
@@ -291,6 +354,8 @@ class MainWindow(QMainWindow):
         self._sync_write_controls()
 
     def _write_config(self):
+        if self._is_hal():
+            return
         if not self.client or not self.client.armed or not self.client.online():
             QMessageBox.warning(self, "Writes disarmed", "Connect to a live PDM and explicitly arm CAN writes.")
             return
@@ -326,7 +391,8 @@ class MainWindow(QMainWindow):
                 self.status.setText(
                     ("PDM ONLINE" if self.client.online() else "Waiting / PDM offline")
                     + f"   · RX {self.client.rx_frames}   · bad/timeouts {self.client.bad_frames}"
-                    + f"   · outputs {len(self.client.channels)}/14"
+                    + (f'   HAL samples {len(self.client.samples)}/21' if self._is_hal()
+                       else f'   outputs {len(self.client.channels)}/14')
                 )
         except Exception as exc:
             self._disconnect()
