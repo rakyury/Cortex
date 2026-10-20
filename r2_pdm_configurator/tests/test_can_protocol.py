@@ -22,7 +22,7 @@ class FakeBus:
         self.sent = []
         self.received = []
         self.closed = False
-    def send(self, msg):
+    def send(self, msg, timeout=None):
         self.sent.append(msg)
     def recv(self, timeout=0):
         return self.received.pop(0) if self.received else None

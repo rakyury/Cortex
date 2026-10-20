@@ -59,6 +59,7 @@ class SystemTelemetry:
     gps: bool = False
     motion_detect: bool = False
     last_seen: float = 0.0
+    secondary_last_seen: float = 0.0
 
 
 @dataclass
@@ -80,6 +81,7 @@ class ChannelTelemetry:
     delayed_off_trigger: int = 0
     delayed_off_ms: int = 0
     last_seen: float = 0.0
+    attribution: str = "uncorrelated diagnostic"
 
 
 @dataclass
@@ -91,6 +93,21 @@ class AnalogueTelemetry:
     voltage_v: float = 0.0
     value: float = 0.0
     last_seen: float = 0.0
+    attribution: str = "uncorrelated diagnostic"
+
+
+@dataclass
+class ConfigReadback:
+    number: int
+    expected: dict[str, int]
+    sent_at: float
+    status: str = "pending"
+    discrepancies: dict[str, tuple[int, object]] = field(default_factory=dict)
+
+    @property
+    def confirmed(self) -> bool:
+        """Legacy replies carry no channel or transaction ID, even if matching."""
+        return False
 
 
 def _unpack_name(packed: int) -> str:
@@ -105,6 +122,7 @@ def decode_system(frame: bytes, status: SystemTelemetry, now: float, second: boo
         status.mobile_data = bool(frame[3])
         status.gps = bool(frame[4])
         status.motion_detect = bool(frame[5])
+        status.secondary_last_seen = now
     else:
         status.alive = frame[0]
         status.current_limit_a = frame[1]
@@ -112,7 +130,7 @@ def decode_system(frame: bytes, status: SystemTelemetry, now: float, second: boo
         status.battery_v = frame[3] / 10
         status.total_current_a = int.from_bytes(frame[4:6], "big") / 10
         status.error_flags = int.from_bytes(frame[6:8], "big")
-    status.last_seen = now
+        status.last_seen = now
 
 
 def decode_channel(frames: dict[int, bytes], number: int, now: float) -> ChannelTelemetry:
@@ -184,6 +202,11 @@ class PdmCanClient:
         self.channels: dict[int, ChannelTelemetry] = {}
         self.analogues: dict[int, AnalogueTelemetry] = {}
         self.digital_mask: Optional[int] = None
+        self.digital_last_seen = 0.0
+        self.last_config_readback: Optional[ConfigReadback] = None
+        self._readback_channel: Optional[int] = None
+        self._closed = False
+        self.transport_errors = 0
         self.channel_cursor = 1
         self.analogue_cursor = 1
         self.pending_channel: Optional[int] = None
@@ -200,14 +223,32 @@ class PdmCanClient:
         self.rx_frames = 0
 
     def online(self) -> bool:
-        return bool(self.system.last_seen and self.now() - self.system.last_seen < 1.0)
+        age = self.now() - self.system.last_seen
+        return bool(not self._closed and self.system.last_seen and 0 <= age < 1.0)
+
+    def _transport_failed(self) -> None:
+        self.transport_errors += 1
+        self.armed = False
+        self.system.last_seen = 0.0
+        self.pending_channel = self.pending_analogue = None
+        self._channel_frames.clear()
+        self._analogue_frames.clear()
+        self._readback_channel = None
+        if self.last_config_readback and self.last_config_readback.status == "pending":
+            self.last_config_readback.status = "transport failed; unconfirmed"
 
     def _send(self, arbitration_id: int, data: bytes) -> None:
+        if self._closed:
+            raise RuntimeError("CAN client is closed")
         if len(data) > 8 or not 0 <= arbitration_id <= 0x7FF:
             raise ValueError("Expected classic 11-bit CAN frame")
         import can
-        self.bus.send(can.Message(arbitration_id=arbitration_id,
-                                  is_extended_id=False, data=data))
+        try:
+            self.bus.send(can.Message(arbitration_id=arbitration_id,
+                                      is_extended_id=False, data=data), timeout=0.05)
+        except Exception:
+            self._transport_failed()
+            raise
 
     def request_channel(self, number: int) -> None:
         if not 1 <= number <= 14:
@@ -231,6 +272,7 @@ class PdmCanClient:
 
     def _require_write_authorization(self) -> None:
         if not self.armed or not self.online():
+            self.armed = False
             raise PermissionError("Writes require explicit arm and a recent valid system heartbeat")
 
     def set_output(self, number: int, duty: int) -> None:
@@ -243,9 +285,12 @@ class PdmCanClient:
     def set_system_current_limit(self, amps: int) -> None:
         """CAN system config F0. Does NOT guarantee enforcement of a global cutoff."""
         self._require_write_authorization()
-        if not 0 <= amps <= 150:
+        if self.last_config_readback and self.last_config_readback.status == "pending":
+            raise RuntimeError("Previous configuration write still awaits diagnostic readback")
+        if type(amps) is not int or not 0 <= amps <= 150:
             raise ValueError("System current limit 0..150 A")
         self._send(self.ids.system_config, bytes((amps, 0, 0, 0, 0, 0, 0, 1)))
+        self.last_config_readback = ConfigReadback(0, {"current_limit_a": amps}, self.now())
 
     def configure_channel(self, number: int, *, channel_type: Optional[int] = None,
                           retries: Optional[int] = None,
@@ -255,6 +300,13 @@ class PdmCanClient:
         No ACK exists for configuration writes; result must be read back.
         """
         self._require_write_authorization()
+        if self.last_config_readback and self.last_config_readback.status == "pending":
+            raise RuntimeError("Previous configuration write still awaits diagnostic readback")
+        for value in (number, channel_type, retries, low_current, high_current):
+            if value is not None and type(value) is not int:
+                raise ValueError("Channel configuration requires integer values")
+        if low_current is not None and high_current is not None and low_current > high_current:
+            raise ValueError("Low-current threshold must not exceed high-current threshold")
         if not 1 <= number <= 14:
             raise ValueError("Channel 1..14 required")
         data = bytearray(8)
@@ -284,34 +336,83 @@ class PdmCanClient:
             raise ValueError("No configuration fields selected")
         data[7] = mask
         self._send(self.ids.config + 1, bytes(data))
+        expected = {key: value for key, value in (
+            ("kind", channel_type), ("retry_count", retries),
+            ("current_low_a", low_current), ("current_high_a", high_current),
+        ) if value is not None}
+        self.last_config_readback = ConfigReadback(number, expected, self.now())
+        self._readback_channel = number
+
+    def _expire_requests(self, now: float) -> None:
+        for kind in ("channel", "analogue"):
+            if (getattr(self, "pending_" + kind) is not None and
+                    not 0 <= now - getattr(self, "_" + kind + "_sent") < 0.35):
+                setattr(self, "pending_" + kind, None)
+                getattr(self, "_" + kind + "_frames").clear()
+                self.bad_frames += 1
+        readback = self.last_config_readback
+        if readback and readback.status == "pending" and not 0 <= now - readback.sent_at < 1.5:
+            readback.status = "timeout; unconfirmed"
+            self._readback_channel = None
 
     def ingest(self, msg) -> None:
-        if getattr(msg, "is_extended_id", True) or getattr(msg, "is_remote_frame", False) or getattr(msg, "is_error_frame", False):
+        if self._closed:
+            return
+        if (getattr(msg, "is_extended_id", True) or getattr(msg, "is_remote_frame", False)
+                or getattr(msg, "is_error_frame", False) or getattr(msg, "is_fd", False)):
             return
         data = bytes(msg.data)
         if len(data) != 8 or getattr(msg, "dlc", len(data)) != 8:
             self.bad_frames += 1
             return
         cid = msg.arbitration_id
+        if type(cid) is not int or not 0 <= cid <= 0x7ff:
+            self.bad_frames += 1
+            return
         now = self.now()
+        self._expire_requests(now)  # Expire BEFORE accepting buffered late responses.
         if cid == self.ids.system:
+            if not self.online():
+                self.armed = False  # A new heartbeat cannot resurrect stale authorization.
             decode_system(data, self.system, now)
+            readback = self.last_config_readback
+            if readback and readback.number == 0 and readback.status == "pending":
+                expected = readback.expected["current_limit_a"]
+                observed = self.system.current_limit_a
+                if observed != expected:
+                    readback.discrepancies = {"current_limit_a": (expected, observed)}
+                readback.status = ("discrepancy; unconfirmed" if readback.discrepancies
+                                   else "diagnostic match; unconfirmed")
         elif cid == self.ids.system + 1:
             decode_system(data, self.system, now, second=True)
         elif cid == self.ids.digital + 1:
             self.digital_mask = data[0]
+            self.digital_last_seen = now
         elif cid == self.ids.channels + 1 and self.pending_channel is not None:
-            if data[0] in range(4):
+            if data[0] in range(4) and data[0] not in self._channel_frames:
                 self._channel_frames[data[0]] = data
                 if len(self._channel_frames) == 4:
                     n = self.pending_channel
                     self.channels[n] = decode_channel(self._channel_frames, n, now)
+                    readback = self.last_config_readback
+                    if (readback and readback.status == "pending" and readback.number == n
+                            and self._readback_channel is None
+                            and self._channel_sent >= readback.sent_at):
+                        readback.discrepancies = {
+                            key: (expected, getattr(self.channels[n], key))
+                            for key, expected in readback.expected.items()
+                            if getattr(self.channels[n], key) != expected
+                        }
+                        readback.status = ("discrepancy; unconfirmed" if readback.discrepancies
+                                           else "diagnostic match; unconfirmed")
                     self.pending_channel = None
                     self._channel_frames = {}
             else:
                 self.bad_frames += 1
+                self.pending_channel = None
+                self._channel_frames.clear()
         elif cid == self.ids.analogue + 1 and self.pending_analogue is not None:
-            if data[0] in (0, 1):
+            if data[0] in (0, 1) and data[0] not in self._analogue_frames:
                 self._analogue_frames[data[0]] = data
                 if len(self._analogue_frames) == 2:
                     n = self.pending_analogue
@@ -320,31 +421,39 @@ class PdmCanClient:
                     self._analogue_frames = {}
             else:
                 self.bad_frames += 1
+                self.pending_analogue = None
+                self._analogue_frames.clear()
         self.rx_frames += 1
 
     def tick(self, *, receive_budget: int = 64) -> None:
         """Call from a GUI timer (e.g. every 25ms). recv is nonblocking."""
+        if self._closed:
+            return
+        if type(receive_budget) is not int or not 0 <= receive_budget <= 256:
+            raise ValueError("Receive budget must be an integer from 0 to 256")
         for _ in range(receive_budget):
-            msg = self.bus.recv(timeout=0.0)
+            try:
+                msg = self.bus.recv(timeout=0.0)
+            except Exception:
+                self._transport_failed()
+                raise
             if msg is None:
                 break
             self.ingest(msg)
         now = self.now()
-        if self.pending_channel is not None and now - self._channel_sent > 0.35:
-            self.pending_channel = None
-            self._channel_frames.clear()
-            self.bad_frames += 1
-        if self.pending_analogue is not None and now - self._analogue_sent > 0.35:
-            self.pending_analogue = None
-            self._analogue_frames.clear()
-            self.bad_frames += 1
+        self._expire_requests(now)
         if not self.online():
             self.armed = False
             return
         if self.pending_channel is None and now - self._last_channel_request >= 0.2:
             self._last_channel_request = now
-            self.request_channel(self.channel_cursor)
-            self.channel_cursor = self.channel_cursor % 14 + 1
+            if self._readback_channel is not None:
+                number = self._readback_channel
+                self._readback_channel = None
+                self.request_channel(number)
+            else:
+                self.request_channel(self.channel_cursor)
+                self.channel_cursor = self.channel_cursor % 14 + 1
         if self.pending_analogue is None and now - self._last_analogue_request >= 0.35:
             self._last_analogue_request = now
             self.request_analogue(self.analogue_cursor)
@@ -355,4 +464,13 @@ class PdmCanClient:
 
     def close(self) -> None:
         self.armed = False
+        if self._closed:
+            return
+        self._closed = True
+        self.pending_channel = self.pending_analogue = None
+        self._channel_frames.clear()
+        self._analogue_frames.clear()
+        if self.last_config_readback and self.last_config_readback.status == "pending":
+            self.last_config_readback.status = "disconnected; unconfirmed"
+        self._readback_channel = None
         self.bus.shutdown()
