@@ -57,6 +57,7 @@ class MainWindow(QMainWindow):
         QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 1px 5px; color: #8dbdec; }
         QLineEdit,QComboBox,QSpinBox,QTreeWidget,QTableView {
             background: #222b37; border: 1px solid #394658; padding: 5px; }
+        QTableView { alternate-background-color: #1d2632; }
         QPushButton { background: #234c70; border: 1px solid #466684; border-radius: 4px; padding: 7px 12px; }
         QPushButton:hover { background: #315f89; }
         QPushButton:disabled { color: #7f8792; background: #252d36; }
@@ -93,6 +94,7 @@ class MainWindow(QMainWindow):
         outer.addWidget(bar)
 
         self.tree = QTreeWidget()
+        self.tree.setMinimumWidth(215)
         self.tree.setHeaderLabels(["Channels / CAN"])
         for name, kind in (("SYSTEM", "system"), ("OUTPUTS", "output"),
                            ("DIGITAL INPUTS", "digital"), ("ANALOGUE INPUTS", "analogue")):
