@@ -16,6 +16,7 @@ All multi-byte integers are little-endian. One PDM per bus is supported.
 | 0x581 sample | channel u16, quality u8, sequence u8, value i32 |
 | 0x582 ACK | transaction u32, operation u8, status u8, next offset u16 |
 | 0x583 readback | transaction u32, active program CRC32 u32 |
+| 0x584 ADC sample | channel u16, quality u8, sequence u8, value i32 |
 | 0x590 BEGIN | transaction u32, length u16, version=1 u8, reserved=0 u8 |
 | 0x591 DATA | transaction u32, byte offset u16, two code bytes |
 | 0x592 COMMIT | transaction u32, CRC32 u32 |
@@ -38,6 +39,28 @@ unimplemented sensor readings are fabricated. Nonzero gate/zero interlock
 diagnostics invalidate the session and stop upload progression.
 
 ## Upload and verification
+
+The additive ADC frame has a separate channel/quality namespace. Channel 100
+is battery millivolts, 101 the sum of 14 sense-current estimates in milliamps,
+102 MCU die temperature in milli-degrees C, and 110–123 individual sense
+currents in milliamps. Qualities 0 (factory calibrated) and 2 (nominal board
+calibration) are numeric. Qualities 1 (unavailable), 3 (invalid/fault) and 4
+(stale acquisition) must appear as gaps. Nominal current is an IS-pin estimate,
+including while gates are OFF; it is not an independently measured load current.
+
+ADC and diagnostic frames alternate, one sample total per 10 ms tick. Healthy
+diagnostic rounds take 420 ms and ADC rounds 340 ms. The firmware refreshes
+queued ADC payloads from its model, which marks capture age at 500 ms. The
+client separately expires ADC observations after 1000 ms; receiving heartbeats
+or diagnostics cannot refresh them. ADC samples share `samples`/`sample_valid`
+with diagnostics, while `adc_rx_frames` and `adc_bad_frames` distinguish their
+receive/rejection counts. The original 0x581 still permits only qualities 0/1.
+
+The client enforces battery 0–20000 mV, die temperature −40000–125000 m°C,
+individual current 0–36816 mA and total current 0–515424 mA. Numeric payloads
+outside these bounds replace the prior reading with an invalid gap. Unknown
+channels/qualities and malformed frames are rejected. ADC channels are never
+accepted as VM sources, so sensor faults cannot silently become VM zero inputs.
 
 `begin_upload(code, confirmed=True)` requires a fresh compatible heartbeat,
 upload capability and `client.armed = True`. Authorization is consumed when

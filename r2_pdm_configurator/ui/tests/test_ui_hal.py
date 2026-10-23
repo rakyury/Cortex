@@ -72,7 +72,7 @@ class HalUiTests(unittest.TestCase):
         self.assertFalse(self.window.send.isEnabled())
         self.assertFalse(self.window.computed_editor.isEnabled())
         self.assertFalse(self.window.protocol.isEnabled())
-        self.assertEqual(self.window.model.rowCount(), 21)
+        self.assertEqual(self.window.model.rowCount(), 38)
         self.assertIn('unavailable', self.window.diagnostic_text.text())
 
     def test_actual_diagnostics_render_and_graph_without_fake_adc(self):
@@ -85,8 +85,8 @@ class HalUiTests(unittest.TestCase):
         self.assertEqual(self.row(300).numeric, 42)
         self.window.table.selectRow(20)
         self.assertEqual(self.window.trend.history[-1], 42)
-        self.assertEqual(self.window.tree.topLevelItem(0).childCount(), 21)
-        self.assertFalse(any(row.unit in ('A', 'V', '°C') for row in self.window.model.samples))
+        self.assertEqual(self.window.tree.topLevelItem(0).childCount(), 38)
+        self.assertTrue(all(row.numeric is None for row in self.window.model.samples[21:]))
         self.sample(300, 0, quality=1, sequence=2)
         self.assertIsNone(self.row(300).numeric)
         self.assertIsNone(self.window.trend.history[-1])

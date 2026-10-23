@@ -81,7 +81,7 @@ class FirmwareIntegrationTests(unittest.TestCase):
     def test_passive_connect_and_real_diagnostics(self):
         self.assertEqual(self.bus.sent, [])
         self.assertFalse(self.client.sample_valid(300))
-        self.assertNotIn(100, self.client.samples)  # No fabricated ADC voltage.
+        self.assertFalse(self.client.sample_valid(100))  # No fabricated ADC voltage.
         self.assert_outputs_off()
 
     def test_actual_vm_upload_ack_readback_and_result(self):

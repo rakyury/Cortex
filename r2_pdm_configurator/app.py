@@ -232,7 +232,7 @@ class MainWindow(QMainWindow):
         self.computed_dock.setVisible(not self._is_hal())
         self.hal_dock.setVisible(self._is_hal())
         self.telemetry_title.setText(
-            'HAL DIAGNOSTICS · output gates OFF · ADC and physical input measurements unavailable'
+            'HAL TELEMETRY · output gates OFF · nominal IS current estimates · MCU die temperature'
             if self._is_hal() else 'LIVE TELEMETRY  |  14 Outputs  /  8 Digital  /  8 Analogue')
         self._refresh_telemetry()
         self._rebuild_tree()
@@ -391,7 +391,7 @@ class MainWindow(QMainWindow):
                 self.status.setText(
                     ("PDM ONLINE" if self.client.online() else "Waiting / PDM offline")
                     + f"   · RX {self.client.rx_frames}   · bad/timeouts {self.client.bad_frames}"
-                    + (f'   HAL samples {len(self.client.samples)}/21' if self._is_hal()
+                    + (f'   HAL samples {len(self.client.samples)}/38' if self._is_hal()
                        else f'   outputs {len(self.client.channels)}/14')
                 )
         except Exception as exc:

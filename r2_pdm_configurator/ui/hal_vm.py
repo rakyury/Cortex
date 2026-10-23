@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QFormLayout, QHBoxLayout, QLabel, QComboBox, QSpinBox,
     QPushButton, QCheckBox, QFileDialog, QMessageBox,
 )
-from ..hal_can import validate_program
+from ..hal_can import validate_program, READABLE_CHANNELS
 from ..models.hal_telemetry import HAL_CHANNELS
 
 OPERATIONS = (('Source value', None), ('Add', 0x10), ('Subtract', 0x11),
@@ -33,7 +33,7 @@ class HalVmEditor(QWidget):
         self.mode.addItems(['Build expression', 'Loaded validated binary'])
         self.source = QComboBox()
         for number, label, unit in HAL_CHANNELS:
-            if number != 300:
+            if number in READABLE_CHANNELS:
                 self.source.addItem(f'{label} · {unit}', number)
         self.operation = QComboBox()
         for label, opcode in OPERATIONS:

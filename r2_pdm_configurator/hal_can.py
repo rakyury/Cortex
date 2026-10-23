@@ -10,9 +10,15 @@ import time
 import zlib
 
 HEARTBEAT, SAMPLE, ACK, READBACK = 0x580, 0x581, 0x582, 0x583
+ADC_SAMPLE = 0x584
 BEGIN, DATA, COMMIT, ABORT, QUERY = range(0x590, 0x595)
 READABLE_CHANNELS = frozenset((*range(200, 214), 230, *range(240, 245)))
 SAMPLE_CHANNELS = READABLE_CHANNELS | {300}
+ADC_CHANNELS = frozenset((100, 101, 102, *range(110, 124)))
+# Conservative integer ceilings below the model's rational 2000mV sense fault
+# boundary; nominal gain is 18407.72, not per-board current calibration.
+ADC_RANGES = {100: (0, 20000), 101: (0, 14 * 36816), 102: (-40000, 125000),
+              **{channel: (0, 36816) for channel in range(110, 124)}}
 HEARTBEAT_TIMEOUT = 0.5
 SAMPLE_TIMEOUT = 1.0
 REPLY_TIMEOUT = 0.35
@@ -95,6 +101,8 @@ class HalCanClient:
         self.vm_active = False
         self.rx_frames = 0
         self.bad_frames = 0
+        self.adc_rx_frames = 0
+        self.adc_bad_frames = 0
         self.transport_errors = 0
         self._closed = False
         self._heartbeat_sequence = None
@@ -113,7 +121,8 @@ class HalCanClient:
 
     def sample_valid(self, channel: int) -> bool:
         sample = self.samples.get(channel)
-        return bool(self.online() and sample and sample.quality == 0
+        numeric = sample is not None and (sample.quality in (0, 2) if channel in ADC_CHANNELS else sample.quality == 0)
+        return bool(self.online() and numeric
                     and 0 <= self.now() - sample.last_seen < SAMPLE_TIMEOUT
                     and (channel != 300 or self.vm_active))
 
@@ -236,18 +245,24 @@ class HalCanClient:
         if self._closed:
             return
         self._expire()
+        cid = getattr(msg, "arbitration_id", None)
         if (getattr(msg, "is_extended_id", True) or getattr(msg, "is_remote_frame", False)
                 or getattr(msg, "is_error_frame", False) or getattr(msg, "is_fd", False)):
             self.bad_frames += 1
+            if cid == ADC_SAMPLE:
+                self.adc_bad_frames += 1
             return
-        cid = getattr(msg, "arbitration_id", None)
-        if cid not in (HEARTBEAT, SAMPLE, ACK, READBACK):
+        if cid not in (HEARTBEAT, SAMPLE, ACK, READBACK, ADC_SAMPLE):
             return
         payload = bytes(msg.data)
         if len(payload) != 8 or getattr(msg, "dlc", len(payload)) != 8:
             self.bad_frames += 1
+            if cid == ADC_SAMPLE:
+                self.adc_bad_frames += 1
             return
         self.rx_frames += 1
+        if cid == ADC_SAMPLE:
+            self.adc_rx_frames += 1
         if cid == HEARTBEAT:
             version, flags, sequence, uptime = struct.unpack("<BBHI", payload)
             if version != 1 or flags & ~7 or not flags & 1:
@@ -274,6 +289,27 @@ class HalCanClient:
                     self._pending = None
             return
         if not self.online():
+            return
+        if cid == ADC_SAMPLE:
+            channel, quality, sequence, value = struct.unpack("<HBBi", payload)
+            if channel not in ADC_CHANNELS or quality not in range(5):
+                self.bad_frames += 1
+                self.adc_bad_frames += 1
+                return
+            old = self.samples.get(channel)
+            if (old is not None and 0 <= self.now() - old.last_seen < SAMPLE_TIMEOUT
+                    and not 0 < ((sequence - old.sequence) & 255) < 128):
+                self.bad_frames += 1
+                self.adc_bad_frames += 1
+                return
+            low, high = ADC_RANGES[channel]
+            if quality in (0, 2) and not low <= value <= high:
+                self.bad_frames += 1
+                self.adc_bad_frames += 1
+                quality = 3  # Invalid latest payload replaces old numeric sample.
+            if quality not in (0, 2):
+                value = 0  # Never expose untrusted nonnumeric payload as a value.
+            self.samples[channel] = HalSample(channel, value, quality, sequence, self.now())
             return
         if cid == SAMPLE:
             channel, quality, sequence, value = struct.unpack("<HBBi", payload)
