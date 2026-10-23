@@ -33,13 +33,48 @@ for units, supported operations and limits.
 This editor is a local diagnostic preview: its programs are not uploaded and
 results cannot be bound to hardware outputs.
 
+## Start dispatcher simulation
+
+Open **View → Start dispatcher · simulation only**. Choose the 14- or
+24-channel profile, 2–4 simultaneous starts, and the simulation current budgets,
+then select **Start simulation**. No CAN connection is needed. The dock shows
+the queue, virtual channel states, reserved current and the reason a start is
+waiting. Request a channel or all channels, advance simulation time, and test
+completion, faults, OFF confirmation and reset.
+
+This runs the actual firmware C scheduler in a separate local process. Virtual
+STARTING/ON states are separate from the physical output indicator, which always
+stays OFF. All load and budget values are fictional fixtures; profile selection
+does not commission a board or authorize hardware control. Nothing is uploaded.
+
+A host C compiler and the paired SynapsePDM source are required. Before launching
+Cortex, point `PDM_FIRMWARE_ROOT` to a checkout containing
+`pdm_cube/src/pdm_start_admission.c` and `pdm_board_profile.c` at commit
+`c0058f829bd82df7941590db964c66f30c131ce8`. Set `CC` to the compiler executable
+if it is not discoverable. For example, in PowerShell:
+
+```powershell
+$env:PDM_FIRMWARE_ROOT = 'C:\path\to\SynapsePDM'
+$env:CC = 'C:\path\to\gcc.exe'
+python r2_pdm_configurator/app.py
+```
+
+On Linux/macOS, use `export PDM_FIRMWARE_ROOT=/path/to/SynapsePDM` and optionally
+`export CC=cc`. Missing source or a compiler produces an explicit error; there is
+no substitute Python scheduler. Compilation starts only when a simulation is
+started. **Stop simulation** or closing the main Cortex window shuts down its
+worker and process. Hiding the dock preserves the session; time advances only
+through manual simulation actions.
+
 ## STM32Cube HAL telemetry and device VM
 
 Select **STM32Cube HAL diagnostics** before connecting to the paired HAL
 firmware. Its separate protocol displays the 14 interlocked gate states, CAN
-diagnostics, uptime, fault mask and device VM result. ADC voltage, load current,
-temperature and physical input acquisition are not implemented; those values
-are not synthesized. The legacy configuration controls are disabled in HAL mode.
+diagnostics, uptime, fault mask and device VM result, plus battery voltage,
+14 current-sense estimates, their sum, and MCU die temperature. Nominal board
+calibration is labeled; invalid or stale acquisition produces gaps. Die temperature
+is not a power-stage temperature measurement. Physical digital inputs are not yet
+acquired. The legacy configuration controls are disabled in HAL mode.
 
 The **HAL diagnostic VM · RAM only** dock builds a diagnostic expression or
 loads validated bytecode. Arm and confirm each upload. Cortex sends bounded,

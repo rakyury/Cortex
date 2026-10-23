@@ -2,7 +2,7 @@ name: HAL firmware and Cortex CAN simulation
 on:
   pull_request:
   push:
-    branches: [feature/r2-pdm-can-configurator, agent/pdm-can-hal-link, agent/pdm-can-adc-telemetry]
+    branches: [feature/r2-pdm-can-configurator, agent/pdm-can-hal-link, agent/pdm-can-adc-telemetry, agent/pdm-ui-start-admission]
   workflow_dispatch:
 permissions:
   contents: read
@@ -22,7 +22,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: rakyury/SynapsePDM
-          ref: 57dec9c1c8a5d38e15f1683cc2338cfb5a70af58
+          ref: c0058f829bd82df7941590db964c66f30c131ce8
           path: firmware-reference
           persist-credentials: false
       - uses: actions/setup-python@v5
@@ -33,7 +33,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0
           python -m pip install -r r2_pdm_configurator/tests/requirements-ci.txt
-      - name: Exercise Python and Qt against actual C protocol and VM
+      - name: Exercise Python and Qt against actual C protocol, VM and start scheduler
         run: |
           mkdir -p artifacts/hal-simulation
           git -C firmware-reference rev-parse HEAD > artifacts/hal-simulation/firmware-sha.txt
