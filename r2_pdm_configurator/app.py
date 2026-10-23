@@ -26,6 +26,7 @@ if __package__:
     from .models.telemetry import diagnostics
     from .ui.trend import TelemetryTrend
     from .ui.computed import ComputedChannelEditor
+    from .ui.start_simulation import StartSimulationPanel
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from r2_pdm_configurator.pdm_can import PdmCanClient, open_adapter
@@ -36,6 +37,7 @@ else:
     from r2_pdm_configurator.models.telemetry import diagnostics
     from r2_pdm_configurator.ui.trend import TelemetryTrend
     from r2_pdm_configurator.ui.computed import ComputedChannelEditor
+    from r2_pdm_configurator.ui.start_simulation import StartSimulationPanel
 
 
 INTERFACES = (
@@ -55,6 +57,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("R2 | Synapse PDM — CAN Configurator")
         self.resize(1450, 850)
         self.client = None
+        self._simulation_close_pending = False
         self.model = TelemetryModel(self)
         self.timer = QTimer(self)
         self.timer.setInterval(25)
@@ -172,6 +175,15 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.hal_dock)
         self.hal_dock.hide()
         view_menu.addAction(self.hal_dock.toggleViewAction())
+
+        self.start_simulation = StartSimulationPanel()
+        self.start_simulation.shutdown_finished.connect(self._simulation_stopped)
+        self.start_simulation_dock = QDockWidget('Start dispatcher · simulation only', self)
+        self.start_simulation_dock.setObjectName('startSimulationDock')
+        self.start_simulation_dock.setWidget(self.start_simulation)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.start_simulation_dock)
+        self.start_simulation_dock.hide()
+        view_menu.addAction(self.start_simulation_dock.toggleViewAction())
 
         panel = QGroupBox('Configuration over CAN  (live controller required)')
         self.legacy_config_panel = panel
@@ -400,7 +412,16 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self._disconnect()
+        if not self.start_simulation.shutdown():
+            self._simulation_close_pending = True
+            event.ignore()
+            return
         super().closeEvent(event)
+
+    def _simulation_stopped(self):
+        if self._simulation_close_pending:
+            self._simulation_close_pending = False
+            self.close()
 
 
 def main():
