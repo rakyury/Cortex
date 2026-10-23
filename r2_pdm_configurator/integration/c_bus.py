@@ -31,7 +31,9 @@ def compile_simulator(destination):
         command += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer",
                     "-fno-sanitize-recover=all"]
     command += ["-I" + str(root / "src"), str(root / "tests/link_simulator.c"),
-                str(root / "src/pdm_link.c"), str(root / "src/pdm_adc.c")]
+                str(root / "src/pdm_link.c"), str(root / "src/pdm_adc.c"),
+                str(root / "src/pdm_start_telemetry.c"),
+                str(root / "src/pdm_board_profile.c"), str(root / "src/pdm_start_admission.c")]
     command += [str(p) for p in sorted((root / "src/r2_shared").rglob("*.c"))]
     command += ["-o", str(destination)]
     result = subprocess.run(command, capture_output=True, text=True, timeout=120)

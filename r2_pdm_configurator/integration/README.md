@@ -17,7 +17,7 @@ python -m unittest discover -s r2_pdm_configurator/integration -p 'test_*.py' -v
 Set `QT_QPA_PLATFORM=offscreen` for headless Qt. Linux CI sets
 `PDM_LINK_SANITIZE=1` to compile the actual C with ASan/UBSan. The dedicated
 workflow pins an immutable SynapsePDM commit and preserves test/compiler logs.
-The paired implementation is `rakyury/SynapsePDM@c0058f829bd82df7941590db964c66f30c131ce8`.
+The paired implementation is `rakyury/SynapsePDM@95ebe100e4b91158480418c209c45733c24f7731`.
 Missing firmware or compiler is a failure, never an implicit skipped test.
 
 The scenarios cover passive connection, telemetry, successful upload and actual
@@ -44,3 +44,11 @@ The gate-state assertions are software invariants. Physical pin levels,
 boot/reset pull-downs, transceiver behavior, load currents and timing still
 require separate HIL. Programs are RAM-only diagnostic expressions, not a
 general output-controller graph or firmware flashing protocol.
+
+The CAN scheduler tests additionally run the actual C snapshot transmitter through
+Classic CAN frames into HalCanClient and the passive Qt diagnostics dock. They
+cover both profiles and all slot limits, total/group budget refusals, held fault
+reserves and reset, corrupt/missing/duplicate/replayed frames, heartbeat-only
+staleness and TX congestion recovery. The simulator drains at most three frames
+per tick like main.c; VM upload and ordinary telemetry remain active. START*
+commands exist only on the test harness stdin, never as CAN control commands.

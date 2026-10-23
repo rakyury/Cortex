@@ -27,6 +27,7 @@ if __package__:
     from .ui.trend import TelemetryTrend
     from .ui.computed import ComputedChannelEditor
     from .ui.start_simulation import StartSimulationPanel
+    from .ui.start_diagnostics import StartDiagnosticsPanel
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from r2_pdm_configurator.pdm_can import PdmCanClient, open_adapter
@@ -38,6 +39,7 @@ else:
     from r2_pdm_configurator.ui.trend import TelemetryTrend
     from r2_pdm_configurator.ui.computed import ComputedChannelEditor
     from r2_pdm_configurator.ui.start_simulation import StartSimulationPanel
+    from r2_pdm_configurator.ui.start_diagnostics import StartDiagnosticsPanel
 
 
 INTERFACES = (
@@ -185,6 +187,14 @@ class MainWindow(QMainWindow):
         self.start_simulation_dock.hide()
         view_menu.addAction(self.start_simulation_dock.toggleViewAction())
 
+        self.start_diagnostics = StartDiagnosticsPanel()
+        self.start_diagnostics_dock = QDockWidget('HAL start dispatcher · read only', self)
+        self.start_diagnostics_dock.setObjectName('halStartDiagnosticsDock')
+        self.start_diagnostics_dock.setWidget(self.start_diagnostics)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.start_diagnostics_dock)
+        self.start_diagnostics_dock.hide()
+        view_menu.addAction(self.start_diagnostics_dock.toggleViewAction())
+
         panel = QGroupBox('Configuration over CAN  (live controller required)')
         self.legacy_config_panel = panel
         row = QHBoxLayout(panel)
@@ -243,6 +253,7 @@ class MainWindow(QMainWindow):
         self.computed_editor.setEnabled(not self._is_hal())
         self.computed_dock.setVisible(not self._is_hal())
         self.hal_dock.setVisible(self._is_hal())
+        self.start_diagnostics_dock.setVisible(self._is_hal())
         self.telemetry_title.setText(
             'HAL TELEMETRY · output gates OFF · nominal IS current estimates · MCU die temperature'
             if self._is_hal() else 'LIVE TELEMETRY  |  14 Outputs  /  8 Digital  /  8 Analogue')
@@ -287,6 +298,7 @@ class MainWindow(QMainWindow):
         self.diagnostic_text.setText(hal_diagnostics(self.client) if self._is_hal()
                                      else diagnostics(self.client, self.model.samples))
         self.hal_editor.set_client(self.client if self._is_hal() else None)
+        self.start_diagnostics.refresh(self.client if self._is_hal() else None)
         row = self.table.currentIndex().row()
         if 0 <= row < len(self.model.samples):
             self.trend.append(self.model.samples[row])
