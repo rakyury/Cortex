@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 from r2_pdm_configurator.hal_can import (
     HalCanClient, validate_program, HEARTBEAT, SAMPLE, ACK, READBACK,
     BEGIN, DATA, COMMIT, ABORT, QUERY, READABLE_CHANNELS,
+    ADC_SAMPLE, ADC_CHANNELS, ADC_RANGES,
 )
 from r2_pdm_configurator.tests.test_can_protocol import FakeBus, FakeMessage
 
@@ -308,6 +309,114 @@ class HalClientTests(unittest.TestCase):
             self.client.begin_upload(CODE, confirmed=True)
         with self.assertRaises(RuntimeError):
             self.client.query_readback()
+
+
+class ADCClientTests(unittest.TestCase):
+    setUp = HalClientTests.setUp
+    feed = HalClientTests.feed
+    heartbeat = HalClientTests.heartbeat
+    sample = HalClientTests.sample
+
+    def adc(self, channel=100, value=12500, quality=2, sequence=1, cid=ADC_SAMPLE):
+        self.feed(cid, struct.pack("<HBBi", channel, quality, sequence, value))
+
+    def test_seventeen_adc_channels_and_only_numeric_qualities(self):
+        self.heartbeat()
+        self.assertEqual(len(ADC_CHANNELS), 17)
+        for channel in ADC_CHANNELS:
+            for sequence, quality in enumerate((0, 1, 2, 3, 4), 1):
+                self.adc(channel, 100, quality, sequence)
+                self.assertEqual(self.client.sample_valid(channel), quality in (0, 2))
+                self.assertEqual(self.client.samples[channel].value, 100 if quality in (0, 2) else 0)
+
+    def test_strict_ranges_replace_last_numeric_with_invalid_gap(self):
+        self.heartbeat()
+        for channel, (low, high) in ADC_RANGES.items():
+            for sequence, value in enumerate((low, high, low - 1, high + 1), 1):
+                self.adc(channel, value, 2, sequence)
+                if sequence <= 2:
+                    self.assertTrue(self.client.sample_valid(channel), (channel, value))
+                else:
+                    self.assertFalse(self.client.sample_valid(channel), (channel, value))
+                    self.assertEqual(self.client.samples[channel].quality, 3)
+        self.assertEqual(self.client.adc_bad_frames, len(ADC_CHANNELS) * 2)
+
+    def test_adc_frame_has_disjoint_ids_and_quality_semantics(self):
+        self.heartbeat()
+        self.adc(channel=230, value=1)  # diagnostic ID on ADC frame
+        self.adc(cid=SAMPLE)  # ADC ID on diagnostic frame
+        self.sample(quality=2)  # new nominal quality forbidden on old frame
+        self.adc(quality=5)
+        self.assertEqual(self.client.samples, {})
+        self.assertEqual(self.client.adc_bad_frames, 2)
+        self.assertEqual(self.client.bad_frames, 4)
+
+    def test_diagnostic_packets_never_refresh_adc_host_age(self):
+        self.heartbeat()
+        self.adc()
+        for sequence in range(2, 8):
+            self.clock += .2
+            self.heartbeat(seq=sequence, uptime=sequence * 200 + 1000)
+            self.sample(sequence=sequence)
+        self.assertTrue(self.client.online())
+        self.assertTrue(self.client.sample_valid(230))
+        self.assertFalse(self.client.sample_valid(100))
+        self.assertEqual(self.client.adc_rx_frames, 1)
+        self.assertEqual(self.client.adc_bad_frames, 0)
+
+    def test_adc_sequence_rollover_independent_of_diagnostics(self):
+        self.heartbeat()
+        self.adc(sequence=255)
+        self.adc(value=13000, sequence=0)
+        self.adc(value=14000, sequence=255)
+        self.adc(value=15000, sequence=0)
+        self.assertEqual(self.client.samples[100].value, 13000)
+        self.assertEqual(self.client.adc_bad_frames, 2)
+        self.sample(sequence=255)
+        self.sample(sequence=0)
+        self.assertTrue(self.client.sample_valid(230))
+
+    def test_missing_or_malformed_adc_does_not_mark_diagnostics_offline(self):
+        self.heartbeat()
+        self.sample()
+        for attribute in ("is_extended_id", "is_remote_frame", "is_fd", "is_error_frame"):
+            msg = FakeMessage(ADC_SAMPLE, struct.pack("<HBBi", 100, 2, 1, 12500))
+            setattr(msg, attribute, True)
+            self.client.ingest(msg)
+        self.feed(ADC_SAMPLE, bytes(7))
+        mismatch = FakeMessage(ADC_SAMPLE, bytes(8))
+        mismatch.dlc = 7
+        self.client.ingest(mismatch)
+        self.assertEqual(self.client.adc_bad_frames, 6)
+        self.assertTrue(self.client.online())
+        self.assertTrue(self.client.sample_valid(230))
+        self.assertFalse(self.client.sample_valid(100))
+
+    def test_nominal_current_is_not_forced_zero_when_gates_off(self):
+        self.heartbeat()
+        self.sample(channel=200, value=0)
+        self.adc(channel=110, value=321)
+        self.assertEqual(self.client.samples[110].value, 321)
+        self.assertTrue(self.client.sample_valid(110))
+        self.adc(channel=110, value=0, sequence=2)
+        self.assertTrue(self.client.sample_valid(110))
+
+    def test_adc_requires_heartbeat_and_restart_clears_samples(self):
+        self.adc()
+        self.assertEqual(self.client.samples, {})
+        self.heartbeat()
+        self.adc()
+        self.heartbeat(seq=0, uptime=0)
+        self.assertEqual(self.client.samples, {})
+        self.adc()
+        self.clock += .5
+        self.client.tick()
+        self.assertEqual(self.client.samples, {})
+
+    def test_adc_sources_still_rejected_by_vm_validator(self):
+        for channel in ADC_CHANNELS:
+            with self.assertRaises(ValueError):
+                validate_program(b"\x02" + struct.pack("<H", channel) + b"\xff")
 
 
 if __name__ == "__main__":

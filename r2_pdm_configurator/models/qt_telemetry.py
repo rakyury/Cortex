@@ -9,7 +9,7 @@ from .hal_telemetry import HAL_ROWS, hal_snapshot
 class TelemetryModel(QAbstractTableModel):
     HEADERS = ('ID', 'Channel', 'Value', 'Unit', 'Status', 'Age')
     COLORS = {'stale': '#dbb96b', 'invalid': '#f07e7e', 'degraded': '#dbb96b',
-              'unavailable': '#8994a5', 'fault': '#f07e7e'}
+              'unavailable': '#8994a5', 'fault': '#f07e7e', 'nominal': '#e7a649'}
 
     def __init__(self, parent=None):
         super().__init__(parent)

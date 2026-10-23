@@ -12,8 +12,10 @@ and diagnostic VM result 300. Output gates must stay zero; interlock must stay
 one. The UI suppresses invariant violations and stale/unavailable values from
 the numeric graph. Freshness uses the transport's 500 ms heartbeat and 1 second
 sample deadlines. Channel 300 is unavailable until the device reports an active
-program. ADC current, battery voltage, temperature and physical inputs are not
-implemented and are never synthesized as live measurements.
+program. ADC telemetry adds 17 rows via 0x584: battery voltage, IS-pin current estimates
+and MCU die temperature. Nominal calibration is explicitly marked; missing or
+invalid readings remain unavailable. Physical input telemetry is not implemented.
+See [ADC telemetry](ADC_TELEMETRY.md) for scaling and quality details.
 
 The **HAL diagnostic VM** dock is separate from the local computed preview.
 Choose an implemented diagnostic source and simple operation/constant, or load
