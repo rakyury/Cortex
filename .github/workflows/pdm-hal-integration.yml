@@ -1,0 +1,49 @@
+name: HAL firmware and Cortex CAN simulation
+on:
+  pull_request:
+  push:
+    branches: [feature/r2-pdm-can-configurator, agent/pdm-can-hal-link, agent/pdm-can-adc-telemetry, agent/pdm-ui-start-admission, agent/pdm-can-start-telemetry]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  actual-c-hal:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PDM_FIRMWARE_ROOT: ${{ github.workspace }}/firmware-reference
+      PDM_LINK_SANITIZE: '1'
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out exact paired HAL implementation
+        uses: actions/checkout@v4
+        with:
+          repository: rakyury/SynapsePDM
+          ref: 95ebe100e4b91158480418c209c45733c24f7731
+          path: firmware-reference
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install offscreen test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0
+          python -m pip install -r r2_pdm_configurator/tests/requirements-ci.txt
+      - name: Exercise Python and Qt against actual C protocol, VM and CAN scheduler snapshots
+        run: |
+          mkdir -p artifacts/hal-simulation
+          git -C firmware-reference rev-parse HEAD > artifacts/hal-simulation/firmware-sha.txt
+          cc --version > artifacts/hal-simulation/compiler.txt
+          set -o pipefail
+          python -W error::ResourceWarning -m unittest discover -s r2_pdm_configurator/integration -p 'test_*.py' -v 2>&1 | tee artifacts/hal-simulation/tests.txt
+      - name: Preserve simulation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hal-cortex-simulation
+          path: artifacts/hal-simulation/
+          if-no-files-found: error

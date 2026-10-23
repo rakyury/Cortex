@@ -1,0 +1,136 @@
+# R2 Synapse PDM — CAN configurator (prototype)
+
+A **separate** PyQt6 configurator alongside the existing Cortex .NET/USB tool.
+Uses the R2 Racing Dash dark diagnostics workflow with adapter selection, channel
+tree, live values, local R2 VM computed channels, and protected CAN configuration.
+
+## Run
+
+From the repository root, with Python 3.10+:
+
+    python -m pip install PyQt6 python-can
+    python r2_pdm_configurator/app.py
+
+Select ECUMaster USBtoCAN, PEAK PCAN-USB, SLCAN/CANable, SocketCAN,
+Kvaser, Vector, or a virtual test bus. Set baud rate to match the PDM
+(default: 500 kbit/s). Connecting does not actuate any load.
+
+For ECUMaster: reuse the **R2 Racing Dash adapter bridge** by setting
+R2_DASH_CONFIGURATOR_SRC to the absolute path of
+racing_dash/configurator_qt/src. That bridge needs the 32-bit helper Python,
+EUSB2CAN.dll, and original project installation. No proprietary binaries
+are copied into this project. See core/can_eusb2can.py in R2 Racing Dash.
+
+## Computed channels
+
+The **Computed channels · local preview** dock creates named values using the
+R2 VM, with results in the telemetry table, channel tree and graph. For example,
+Voltage / Less than / Constant 11500 creates a low-battery indicator below
+11.5 V. Definitions can be saved and loaded locally. Missing or stale inputs
+produce no numeric result. See [Computed channels](ui/COMPUTED_CHANNELS.md)
+for units, supported operations and limits.
+
+This editor is a local diagnostic preview: its programs are not uploaded and
+results cannot be bound to hardware outputs.
+
+## Start dispatcher simulation
+
+Open **View → Start dispatcher · simulation only**. Choose the 14- or
+24-channel profile, 2–4 simultaneous starts, and the simulation current budgets,
+then select **Start simulation**. No CAN connection is needed. The dock shows
+the queue, virtual channel states, reserved current and the reason a start is
+waiting. Request a channel or all channels, advance simulation time, and test
+completion, faults, OFF confirmation and reset.
+
+This runs the actual firmware C scheduler in a separate local process. Virtual
+STARTING/ON states are separate from the physical output indicator, which always
+stays OFF. All load and budget values are fictional fixtures; profile selection
+does not commission a board or authorize hardware control. Nothing is uploaded.
+
+A host C compiler and the paired SynapsePDM source are required. Before launching
+Cortex, point `PDM_FIRMWARE_ROOT` to a checkout containing
+`pdm_cube/src/pdm_start_admission.c` and `pdm_board_profile.c` at commit
+`c0058f829bd82df7941590db964c66f30c131ce8`. Set `CC` to the compiler executable
+if it is not discoverable. For example, in PowerShell:
+
+```powershell
+$env:PDM_FIRMWARE_ROOT = 'C:\path\to\SynapsePDM'
+$env:CC = 'C:\path\to\gcc.exe'
+python r2_pdm_configurator/app.py
+```
+
+On Linux/macOS, use `export PDM_FIRMWARE_ROOT=/path/to/SynapsePDM` and optionally
+`export CC=cc`. Missing source or a compiler produces an explicit error; there is
+no substitute Python scheduler. Compilation starts only when a simulation is
+started. **Stop simulation** or closing the main Cortex window shuts down its
+worker and process. Hiding the dock preserves the session; time advances only
+through manual simulation actions.
+
+## Passive HAL start-admission telemetry
+
+In HAL mode, open **View > HAL start dispatcher - read only** to inspect the
+advertised 14/24-channel profile, FIFO queue, current reserves and delay reasons.
+This panel receives complete CRC-checked CAN snapshots; it sends no scheduler
+commands. Missing, corrupt or stale data is unavailable, never assumed zero.
+The uncommissioned hardware build advertises profile14 with unknown limits and
+inhibited starts. Available profile14/24 loads are explicitly simulator fixtures.
+See [HAL scheduler diagnostics](ui/HAL_START_DIAGNOSTICS.md) and
+[wire format](HAL_CAN.md). Physical outputs remain OFF pending HIL.
+
+## STM32Cube HAL telemetry and device VM
+
+Select **STM32Cube HAL diagnostics** before connecting to the paired HAL
+firmware. Its separate protocol displays the 14 interlocked gate states, CAN
+diagnostics, uptime, fault mask and device VM result, plus battery voltage,
+14 current-sense estimates, their sum, and MCU die temperature. Nominal board
+calibration is labeled; invalid or stale acquisition produces gaps. Die temperature
+is not a power-stage temperature measurement. Physical digital inputs are not yet
+acquired. The legacy configuration controls are disabled in HAL mode.
+
+The **HAL diagnostic VM · RAM only** dock builds a diagnostic expression or
+loads validated bytecode. Arm and confirm each upload. Cortex sends bounded,
+correlated chunks; only an ACK and matching active-program CRC readback confirm
+the upload. A lost COMMIT reply is shown as unknown and requires explicit
+readback. The program disappears on reset. It cannot store arbitrary channels,
+write flash/EEPROM, or control outputs.
+
+This HAL version uses normal CAN for telemetry and replies, including CAN ACKs.
+Physical outputs remain forced LOW/OFF pending HIL. See
+[HAL UI guide](ui/HAL_DIAGNOSTICS.md), [wire protocol](HAL_CAN.md) and
+[actual-C simulator checks](integration/README.md). No hardware has been flashed
+or exercised by these tests.
+
+## Protocol
+
+Synapse PDM is **Classic CAN, 11-bit IDs**, not the dash 29-bit bulk
+transport. Message layout follows the original SynapsePDM.dbc and
+CANComms.cpp:
+- System: 0x720 and 0x721 every 100 ms (voltage, current, temp, faults).
+- Channel status: 0x700 request / 0x701 four-frame response.
+- Digital inputs: 0x710 request / 0x711 response.
+- Analogue inputs: 0x712 request / 0x713 two-frame response.
+- Channel configuration: 0x740..0x74E (only supported options are exposed).
+- System configuration: 0x730..0x736.
+
+CAN configuration writes require explicit ARM, a fresh heartbeat, and a
+confirmation dialog. **There is no write acknowledgement or atomic rollback in
+the stock protocol.** Verify settings after writing and NEVER modify
+safety-critical loads while powered. Live output actuation is intentionally
+not exposed in the GUI.
+
+IMPORTANT limitations: channel status responses do not include an echoed
+channel number or transaction ID. Polling is serialized, but delayed frames
+from earlier requests cannot be unambiguously identified. This prototype
+requires bench testing and an extended PDM protocol before critical use.
+Existing USB Cortex features such as full firmware flashing are not yet
+implemented over CAN.
+
+## Tests
+
+    python -m pip install -r r2_pdm_configurator/tests/requirements-ci.txt
+    python -m unittest discover -s r2_pdm_configurator/tests -v
+    python -m unittest discover -s r2_pdm_configurator/ui/tests -v
+
+Tests use fake/virtual CAN buses and offscreen Qt; no physical hardware is
+required. Install a host C compiler for the compiled Racing Dash VM parity and
+fuzz tests. CI runs both test suites and the compiled C checks.

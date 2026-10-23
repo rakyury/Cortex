@@ -37,6 +37,12 @@ namespace Cortex.Services
                     return false;
                 }
 
+                if (!ValidateConfiguration(snapshot, out error))
+                {
+                    snapshot = null;
+                    return false;
+                }
+
                 error = null;
                 return true;
             }
@@ -48,8 +54,141 @@ namespace Cortex.Services
             }
         }
 
+        // Validate untrusted configuration files before applying any settings.
+        // These limits match the current Synapse PDM firmware, not the UI ranges.
+        private static bool ValidateConfiguration(ConfigSnapshot snapshot, out string? error)
+        {
+            error = null;
+
+            if (snapshot.FormatVersion != 1)
+            {
+                error = "Unsupported configuration format version.";
+                return false;
+            }
+
+            if (snapshot.Channels is { Count: > Constants.NUM_OUTPUT_CHANNELS })
+            {
+                error = "Configuration contains more than 14 output channels.";
+                return false;
+            }
+            if (snapshot.DigitalInputs is { Count: > Constants.NUM_DIGITAL_INPUTS } ||
+                snapshot.AnalogueInputs is { Count: > Constants.NUM_ANALOGUE_INPUTS })
+            {
+                error = "Configuration contains more input channels than this PDM supports.";
+                return false;
+            }
+
+            if (snapshot.Channels != null)
+            {
+                for (int i = 0; i < snapshot.Channels.Count; i++)
+                {
+                    var channel = snapshot.Channels[i];
+                    if (channel == null)
+                    {
+                        error = $"Missing output channel {i + 1}.";
+                        return false;
+                    }
+                    if ((channel.ChanType.HasValue && !Enum.IsDefined(channel.ChanType.Value)) ||
+                        (channel.Category.HasValue && !Enum.IsDefined(channel.Category.Value)) ||
+                        (channel.PWMMin is byte lower && channel.PWMMax is byte upper && lower > upper))
+                    {
+                        error = $"Invalid output type, category or PWM range on channel {i + 1}.";
+                        return false;
+                    }
+                    if ((channel.CurrentThresholdHigh is float high && (!float.IsFinite(high) || high < 0 || high > 17)) ||
+                        (channel.CurrentThresholdLow is float low && (!float.IsFinite(low) || low < 0 || low > 17)) ||
+                        (channel.InrushCurrentLimit is float inrush && (!float.IsFinite(inrush) || inrush < 0 || inrush > 50)) ||
+                        (channel.PWMSetDuty is byte duty && duty > 100) ||
+                        (channel.PWMMin is byte pwmMin && pwmMin > 100) ||
+                        (channel.PWMMax is byte pwmMax && pwmMax > 100))
+                    {
+                        error = $"Invalid current limit or PWM percentage on output channel {i + 1}.";
+                        return false;
+                    }
+                    if (channel.CurrentThresholdHigh is float max &&
+                        channel.CurrentThresholdLow is float min && min > max)
+                    {
+                        error = $"Low-current threshold exceeds high-current threshold on output channel {i + 1}.";
+                        return false;
+                    }
+                    if ((channel.InrushDelay is float delay && (!float.IsFinite(delay) || delay < 0 || delay > 2000)) ||
+                        (channel.SoftStartTime is float softStart && (!float.IsFinite(softStart) || softStart < 0 || softStart > 5000)) ||
+                        (channel.SoftStopTime is float softStop && (!float.IsFinite(softStop) || softStop < 0 || softStop > 5000)))
+                    {
+                        error = $"Invalid output timing value on channel {i + 1}.";
+                        return false;
+                    }
+                }
+            }
+
+            // Sections are applied by array position. Explicit numbers must agree
+            // with that position, otherwise the UI could target another input.
+            if (snapshot.DigitalInputs != null)
+            {
+                for (int i = 0; i < snapshot.DigitalInputs.Count; i++)
+                {
+                    var input = snapshot.DigitalInputs[i];
+                    if (input == null || (input.InputNumber.HasValue && input.InputNumber.Value != i + 1))
+                    {
+                        error = $"Digital input number must match position {i + 1}.";
+                        return false;
+                    }
+                }
+            }
+            if (snapshot.AnalogueInputs != null)
+            {
+                for (int i = 0; i < snapshot.AnalogueInputs.Count; i++)
+                {
+                    var input = snapshot.AnalogueInputs[i];
+                    if (input == null || (input.InputNumber.HasValue && input.InputNumber.Value != i + 1) ||
+                        (input.ChanType.HasValue && !Enum.IsDefined(input.ChanType.Value)) ||
+                        (input.Units.HasValue && !Enum.IsDefined(input.Units.Value)))
+                    {
+                        error = $"Invalid analogue input number, type or units at position {i + 1}.";
+                        return false;
+                    }
+                }
+            }
+
+            if (snapshot.SystemParameters?.SystemCurrentLimit is float systemLimit &&
+                (!float.IsFinite(systemLimit) || systemLimit < 0 || systemLimit > 150))
+            {
+                error = "System current limit must be between 0 and 150 A.";
+                return false;
+            }
+
+            return true;
+        }
+
         public static void ApplySnapshot(DataStructures target, ConfigSnapshot snapshot)
         {
+            ArgumentNullException.ThrowIfNull(target);
+            ArgumentNullException.ThrowIfNull(snapshot);
+            if (!ValidateConfiguration(snapshot, out var validationError))
+                throw new ArgumentException(validationError, nameof(snapshot));
+
+            // A partial import must also be valid against the retained settings.
+            // Complete this preflight for all channels before mutating any model.
+            if (snapshot.Channels != null)
+            {
+                if (snapshot.Channels.Count > target.ChannelsStaticData.Count)
+                    throw new ArgumentException("Target has fewer channels than the configuration.", nameof(snapshot));
+                for (int i = 0; i < snapshot.Channels.Count; i++)
+                {
+                    var source = snapshot.Channels[i];
+                    var current = target.ChannelsStaticData[i];
+                    if (((source.CurrentThresholdLow.HasValue || source.CurrentThresholdHigh.HasValue) &&
+                         (source.CurrentThresholdLow ?? current.CurrentThresholdLow) >
+                         (source.CurrentThresholdHigh ?? current.CurrentThresholdHigh)) ||
+                        ((source.PWMMin.HasValue || source.PWMMax.HasValue) &&
+                         (source.PWMMin ?? current.PWMMin) > (source.PWMMax ?? current.PWMMax)))
+                        throw new ArgumentException($"Partial import reverses current or PWM bounds on channel {i + 1}.", nameof(snapshot));
+                }
+            }
+            if ((snapshot.DigitalInputs?.Count ?? 0) > target.DigitalInputsStaticData.Count ||
+                (snapshot.AnalogueInputs?.Count ?? 0) > target.AnalogueInputsStaticData.Count)
+                throw new ArgumentException("Target has fewer inputs than the configuration.", nameof(snapshot));
+
             if (snapshot.Channels != null)
             {
                 int channelCount = Math.Min(target.ChannelsStaticData.Count, snapshot.Channels.Count);

@@ -1,0 +1,38 @@
+name: Cortex .NET build and tests
+
+on:
+  push:
+    branches: [main, fix/protocol-safety, 'feature/r2-pdm-can-configurator']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dotnet:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Restore
+        run: dotnet restore tests/Cortex.Tests/Cortex.Tests.csproj
+      - name: Build app and tests
+        run: dotnet build tests/Cortex.Tests/Cortex.Tests.csproj --configuration Release --no-restore -warnaserror
+      - name: Run tests and collect coverage
+        run: dotnet test tests/Cortex.Tests/Cortex.Tests.csproj --configuration Release --no-build --collect:"XPlat Code Coverage" --logger "trx;LogFileName=tests.trx"
+      - name: Upload test results and coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cortex-test-results-${{ matrix.os }}
+          path: |
+            tests/Cortex.Tests/TestResults/
+          if-no-files-found: error

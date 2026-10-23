@@ -187,4 +187,39 @@ public class ConfigFileSerializerTests
 
         Assert.Equal(InputPinCatalog.IgnitionInputPin, data.ChannelsStaticData[0].InputControlPin);
     }
+
+    [Theory]
+    [InlineData("""{"Channels":[{"CurrentThresholdHigh":-1}]}""")]
+    [InlineData("""{"Channels":[{"CurrentThresholdHigh":17.1}]}""")]
+    [InlineData("""{"Channels":[{"CurrentThresholdLow":18}]}""")]
+    [InlineData("""{"Channels":[{"CurrentThresholdLow":12,"CurrentThresholdHigh":10}]}""")]
+    [InlineData("""{"Channels":[{"InrushCurrentLimit":51}]}""")]
+    [InlineData("""{"Channels":[{"PWMSetDuty":101}]}""")]
+    [InlineData("""{"Channels":[{"PWMMin":101}]}""")]
+    [InlineData("""{"SystemParameters":{"SystemCurrentLimit":151}}""")]
+    public void TryDeserialize_RejectsUnsafePowerSettings(string json)
+    {
+        bool accepted = ConfigFileSerializer.TryDeserialize(json, out var snapshot, out string? error);
+        Assert.False(accepted);
+        Assert.Null(snapshot);
+        Assert.False(string.IsNullOrWhiteSpace(error));
+    }
+
+    [Fact]
+    public void TryDeserialize_RejectsExcessChannelCount()
+    {
+        string channels = string.Join(",", System.Linq.Enumerable.Repeat("{}", Constants.NUM_OUTPUT_CHANNELS + 1));
+        bool accepted = ConfigFileSerializer.TryDeserialize("{\"Channels\":[" + channels + "]}", out _, out string? error);
+        Assert.False(accepted);
+        Assert.Contains("more than 14", error);
+    }
+
+    [Fact]
+    public void TryDeserialize_AllowsUpperBoundaryValues()
+    {
+        string json = """{"Channels":[{"CurrentThresholdHigh":17,"CurrentThresholdLow":0,"InrushCurrentLimit":50,"PWMSetDuty":100}],"SystemParameters":{"SystemCurrentLimit":150}}""";
+        bool accepted = ConfigFileSerializer.TryDeserialize(json, out var snapshot, out string? error);
+        Assert.True(accepted, error);
+        Assert.NotNull(snapshot);
+    }
 }
