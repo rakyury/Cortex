@@ -8,6 +8,7 @@ import secrets
 import struct
 import time
 import zlib
+from .start_telemetry import StartTelemetryDecoder, START_IDS
 
 HEARTBEAT, SAMPLE, ACK, READBACK = 0x580, 0x581, 0x582, 0x583
 ADC_SAMPLE = 0x584
@@ -104,6 +105,7 @@ class HalCanClient:
         self.adc_rx_frames = 0
         self.adc_bad_frames = 0
         self.transport_errors = 0
+        self._start_telemetry = StartTelemetryDecoder()
         self._closed = False
         self._heartbeat_sequence = None
         self._uptime = None
@@ -119,6 +121,31 @@ class HalCanClient:
     def can_upload(self) -> bool:
         return self.online() and self.interlocked and self.upload_supported
 
+    @property
+    def start_snapshot(self):
+        return self._start_telemetry.snapshot
+
+    @property
+    def start_snapshot_error(self):
+        return self._start_telemetry.error
+
+    @property
+    def start_rx_frames(self):
+        return self._start_telemetry.rx_frames
+
+    @property
+    def start_bad_frames(self):
+        return self._start_telemetry.bad_frames
+
+    def _device_uptime(self):
+        if self._uptime is None:
+            return None
+        return (self._uptime + int(max(0, self.now() - self.heartbeat_last_seen) * 1000)) & 0xffffffff
+
+    def start_snapshot_valid(self):
+        self._expire()
+        return self.online() and self._start_telemetry.valid(self.now(), self._device_uptime())
+
     def sample_valid(self, channel: int) -> bool:
         sample = self.samples.get(channel)
         numeric = sample is not None and (sample.quality in (0, 2) if channel in ADC_CHANNELS else sample.quality == 0)
@@ -129,6 +156,8 @@ class HalCanClient:
     def _reset_session(self, reason: str) -> None:
         self.armed = False
         self.samples.clear()
+        self._start_telemetry.reset()
+        self._start_telemetry.error = reason
         self._pending = None
         self._acked = False
         self._readback_crc = None
@@ -140,6 +169,7 @@ class HalCanClient:
 
     def _expire(self) -> None:
         now = self.now()
+        self._start_telemetry.expire(now)
         if self._heartbeat_sequence is not None and not 0 <= now - self.heartbeat_last_seen < HEARTBEAT_TIMEOUT:
             self._reset_session("Heartbeat expired; session cleared")
         if self._pending is not None and now >= self._pending[2]:
@@ -251,14 +281,18 @@ class HalCanClient:
             self.bad_frames += 1
             if cid == ADC_SAMPLE:
                 self.adc_bad_frames += 1
+            if cid in START_IDS:
+                self._start_telemetry.reject('Scheduler requires standard classic DATA frames')
             return
-        if cid not in (HEARTBEAT, SAMPLE, ACK, READBACK, ADC_SAMPLE):
+        if cid not in (HEARTBEAT, SAMPLE, ACK, READBACK, ADC_SAMPLE, *START_IDS):
             return
         payload = bytes(msg.data)
         if len(payload) != 8 or getattr(msg, "dlc", len(payload)) != 8:
             self.bad_frames += 1
             if cid == ADC_SAMPLE:
                 self.adc_bad_frames += 1
+            if cid in START_IDS:
+                self._start_telemetry.reject('Scheduler requires exactly8 payload bytes')
             return
         self.rx_frames += 1
         if cid == ADC_SAMPLE:
@@ -289,6 +323,11 @@ class HalCanClient:
                     self._pending = None
             return
         if not self.online():
+            return
+        if cid in START_IDS:
+            before = self.start_bad_frames
+            self._start_telemetry.ingest(cid, payload, self.now(), self._device_uptime())
+            self.bad_frames += self.start_bad_frames - before
             return
         if cid == ADC_SAMPLE:
             channel, quality, sequence, value = struct.unpack("<HBBi", payload)

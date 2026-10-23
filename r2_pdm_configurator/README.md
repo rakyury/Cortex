@@ -66,6 +66,17 @@ started. **Stop simulation** or closing the main Cortex window shuts down its
 worker and process. Hiding the dock preserves the session; time advances only
 through manual simulation actions.
 
+## Passive HAL start-admission telemetry
+
+In HAL mode, open **View > HAL start dispatcher - read only** to inspect the
+advertised 14/24-channel profile, FIFO queue, current reserves and delay reasons.
+This panel receives complete CRC-checked CAN snapshots; it sends no scheduler
+commands. Missing, corrupt or stale data is unavailable, never assumed zero.
+The uncommissioned hardware build advertises profile14 with unknown limits and
+inhibited starts. Available profile14/24 loads are explicitly simulator fixtures.
+See [HAL scheduler diagnostics](ui/HAL_START_DIAGNOSTICS.md) and
+[wire format](HAL_CAN.md). Physical outputs remain OFF pending HIL.
+
 ## STM32Cube HAL telemetry and device VM
 
 Select **STM32Cube HAL diagnostics** before connecting to the paired HAL

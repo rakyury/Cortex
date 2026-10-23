@@ -17,6 +17,9 @@ All multi-byte integers are little-endian. One PDM per bus is supported.
 | 0x582 ACK | transaction u32, operation u8, status u8, next offset u16 |
 | 0x583 readback | transaction u32, active program CRC32 u32 |
 | 0x584 ADC sample | channel u16, quality u8, sequence u8, value i32 |
+| 0x585 scheduler BEGIN | version=1 u8, reserved=0 u8, payload length u16, sequence u32 |
+| 0x586 scheduler DATA | sequence low16 u16, chunk index u8, five payload bytes |
+| 0x587 scheduler END | sequence u32, snapshot CRC32 u32 |
 | 0x590 BEGIN | transaction u32, length u16, version=1 u8, reserved=0 u8 |
 | 0x591 DATA | transaction u32, byte offset u16, two code bytes |
 | 0x592 COMMIT | transaction u32, CRC32 u32 |
@@ -37,6 +40,80 @@ Quality 0 means valid; quality 1 means unavailable. Channel 300 is usable only
 while the heartbeat reports an active VM. No voltage, current, temperature or
 unimplemented sensor readings are fabricated. Nonzero gate/zero interlock
 diagnostics invalidate the session and stop upload progression.
+
+## Readonly scheduler telemetry
+
+The scheduler transfer is passive telemetry: no discovery requests or control
+commands are sent. It shares the existing heartbeat/session and does not alter
+VM upload or ADC layouts. Every complete transfer describes one immutable
+capture of the actual C scheduler, rather than mixing independently timed rows.
+
+CRC32 is IEEE/zlib over all eight BEGIN bytes followed by the exact payload,
+excluding DATA padding. DATA indexes start at zero, in order; the last chunk
+has zero padding. Identical BEGIN/DATA duplicates are harmless and do not extend
+the deadline. Missing, conflicting or reordered chunks, unknown version,
+invalid length/flags/counts, semantic inconsistencies, or a bad CRC invalidate
+the transfer. A newer BEGIN replaces an unfinished transfer. The receiver
+holds at most408 payload bytes and requires completion within1500ms.
+
+The payload begins with this24-byte header:
+
+| Offset | Field |
+| --- | --- |
+| 0–7 | profile u8, channel count u8, flags u8, slots u8, reserved start slots u8, group count u8, queue count u8, reserved=0 u8 |
+| 8 | capture uptime ms u32 |
+| 12 | total budget mA u32 |
+| 16 | total reserved mA u32 |
+| 20 | measured total mA u32 |
+
+Flags are bit0 available, bit1 simulation fixture, bit2 inhibited, bit3
+physical outputs OFF (required), and bit4 measured total unavailable; other bits
+are rejected. Bit4 is valid only on an available, inhibited snapshot with a zero
+measured-total payload sentinel. The API then exposes `total_measured_ma=None`
+while preserving queue and reservations. A new scheduler capture must not make
+an expired/invalid current measurement appear fresh. A genuine valid measured
+zero remains numeric when bit4 is clear. Profiles14 and24
+must match their channel counts. Available profiles have2–4 start slots and
+1–24 groups. Profile24 currently requires the simulation flag.
+
+Each group is eight bytes: budget mA u32 then reserved mA u32; its ordinal is
+its zero-based group ID. Each channel is eight bytes: state/slot flags u8,
+reason u8, queue position u8 (one-based, zero means absent), group ID u8,
+reserved mA u32. Channel ordinals are output numbers1–count. State occupies
+bits0–2 (OFF, QUEUED, STARTING, ON, FAULT =0–4), bit7 records a reserved start
+slot, and bits3–6 must be zero. Reason codes0–13 are OK, BAD_CONFIG,
+BAD_CHANNEL, OLD_REQUEST, EXPIRED, UNHEALTHY, UNKNOWN_OFF, SLOTS, TOTAL_BUDGET,
+GROUP_BUDGET, COOLDOWN, DEADLINE, FAULT_LATCHED and CANCELLED. Queue positions,
+slot totals and group/channel reservations are cross-checked. Measured current
+may exceed the budget during a fault; it is not confused with a reservation.
+
+Uncommissioned hardware14 truthfully reports flags12 (unavailable, inhibited,
+physical OFF), zero slots/groups/queue/totals, and14 OFF/BAD_CONFIG channel
+records with unknown group255 and zero reservation. These are wire sentinels:
+the Python API exposes limits/current/reserves as `None`, with empty row and
+queue tuples, so unavailable values are never presented as live zeros.
+
+The sequence must advance under uint32 serial-number ordering, including
+wraparound. Its high-water mark survives corrupt/expired transfers and resets
+only with the existing heartbeat session. This is correlation and accidental
+replay rejection within a session, not authentication or replay protection
+across reboot. One sender per bus remains required.
+
+Freshness uses capture time as well as receipt time. A completed capture older
+than2000ms is rejected. Validity expires when capture age or time since
+publication reaches2500ms, and immediately on heartbeat expiry/disconnect.
+Device uptime is projected from the latest heartbeat with host monotonic time;
+at most200ms of future capture skew is allowed for heartbeat cadence/delivery
+jitter. Stalled transmission cannot make an old capture appear fresh merely
+because END just arrived. Firmware sends at most one scheduler frame per tick
+and abandons stalled transfers after1500ms before taking a new capture.
+
+`HalCanClient.start_snapshot` is a frozen `StartSnapshot`; nested channel/group
+records and queue are immutable tuples. `start_snapshot_valid()` checks the
+heartbeat, complete transfer and both freshness limits. It may return true for
+fresh unavailable metadata: use `snapshot.available` separately.
+`start_snapshot_error`, `start_rx_frames` and `start_bad_frames` expose diagnostics.
+The readonly CAN view is separate from the local simulator's request controls.
 
 ## Upload and verification
 
