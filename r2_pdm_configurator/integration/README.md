@@ -17,7 +17,7 @@ python -m unittest discover -s r2_pdm_configurator/integration -p 'test_*.py' -v
 Set `QT_QPA_PLATFORM=offscreen` for headless Qt. Linux CI sets
 `PDM_LINK_SANITIZE=1` to compile the actual C with ASan/UBSan. The dedicated
 workflow pins an immutable SynapsePDM commit and preserves test/compiler logs.
-The paired implementation is `rakyury/SynapsePDM@95ebe100e4b91158480418c209c45733c24f7731`.
+The paired implementation is `rakyury/SynapsePDM@78189be295b981a3019b83d7a17eb4d7a44652e9`.
 Missing firmware or compiler is a failure, never an implicit skipped test.
 
 The scenarios cover passive connection, telemetry, successful upload and actual
@@ -52,3 +52,13 @@ reserves and reset, corrupt/missing/duplicate/replayed frames, heartbeat-only
 staleness and TX congestion recovery. The simulator drains at most three frames
 per tick like main.c; VM upload and ordinary telemetry remain active. START*
 commands exist only on the test harness stdin, never as CAN control commands.
+
+## Fault preparation before HIL
+
+See [HIL readiness matrix](HIL_READINESS.md) for fault IDs, expected behavior,
+software evidence and outstanding physical checks. Run
+`python -m r2_pdm_configurator.integration.run_hil_faults --output artifacts/hil-faults`
+for the targeted cases, or add `--pattern "test_*.py"` for all integration tests.
+The runner emits JSON, JUnit and logs, fails on missing/skipped evidence, and
+records firmware/Cortex revisions, compiler and sanitizer mode. It never
+authorizes hardware. Outputs remain OFF; electrical HIL is still outstanding.
